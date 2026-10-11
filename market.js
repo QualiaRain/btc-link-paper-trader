@@ -1,4 +1,5 @@
 // Public read-only data. No credentials, wallets or trading endpoints.
+export {fetchHistoricalRange} from './replay.js';
 const BASE = 'https://api.exchange.coinbase.com';
 const ASSETS = ['BTC', 'LINK'];
 const MINUTE = 60_000;

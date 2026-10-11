@@ -4,9 +4,11 @@ const iso = t => new Date(t).toISOString();
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const defaults = { initialCash: 1000, horizonMs: 420000, feeBps: 10, slippageBps: 2,
   bufferBps: 10, model: 'trend', mode: 'replay', durationMs: 48*3600000, maxQuoteAgeMs: 60000,
-  maxOutcomeLatenessMs: 30000 };
+  maxOutcomeLatenessMs: 30000, lookbackIntervals: 7, allocationFraction: .5, stopLossBps: 0 };
 
 export function createAccount(config = {}) {
+  if (!config || typeof config!=='object' || Array.isArray(config)) throw new Error('Invalid configuration');
+  for (const key of Object.keys(config)) if (!Object.hasOwn(defaults,key)) throw new Error(`Unknown configuration field: ${key}`);
   const c = {...defaults, ...config};
   for (const key of ['initialCash','horizonMs','durationMs','maxQuoteAgeMs'])
     if (!finite(c[key]) || c[key] <= 0) throw new Error(`Invalid ${key}`);
@@ -14,9 +16,14 @@ export function createAccount(config = {}) {
   for (const key of ['feeBps','slippageBps','bufferBps'])
     if (!finite(c[key]) || c[key] < 0 || c[key] >= 10000) throw new Error(`Invalid ${key}`);
   if (!['trend','same-price'].includes(c.model) || !['live','replay'].includes(c.mode)) throw new Error('Invalid model or mode');
-  return {config:c,cash:c.initialCash,positions:{BTC:{qty:0},LINK:{qty:0}},ledger:[],forecasts:[],equity:[],
+  const maxima={initialCash:1e9,horizonMs:31*86400000,durationMs:366*86400000,maxQuoteAgeMs:86400000,maxOutcomeLatenessMs:86400000,feeBps:1000,slippageBps:1000,bufferBps:1000};
+  for (const [key,max] of Object.entries(maxima)) if (c[key]>max) throw new Error(`${key} exceeds supported maximum`);
+  if (!Number.isInteger(c.lookbackIntervals)||c.lookbackIntervals<1||c.lookbackIntervals>240) throw new Error('lookbackIntervals must be an integer from 1 to 240');
+  if (!finite(c.allocationFraction)||c.allocationFraction<0||c.allocationFraction>.5) throw new Error('allocationFraction must be between 0 and 0.5');
+  if (!finite(c.stopLossBps)||c.stopLossBps<0||c.stopLossBps>9999) throw new Error('stopLossBps must be between 0 and 9999');
+  return {config:c,cash:c.initialCash,positions:{BTC:{qty:0,costBasis:0},LINK:{qty:0,costBasis:0}},ledger:[],forecasts:[],equity:[],
     startedAt:null,endsAt:null,lastDecisionAt:null,lastFrameAt:null,lastValidFrameAt:null,status:'ready',
-    baseline:{cash:c.initialCash,positions:{BTC:{qty:0},LINK:{qty:0}}},sequence:0};
+    baseline:{cash:c.initialCash,positions:{BTC:{qty:0,costBasis:0},LINK:{qty:0,costBasis:0}}},sequence:0};
 }
 
 function event(a,type,time,details={}) {
@@ -46,15 +53,18 @@ function fill(a,book,asset,side,dollars,frame,actor) {
     if (!(total>1e-10)) return;
     notional=total/(1+p.fee);qty=notional/p.buy;fee=total-notional;
     book.cash-=total;book.positions[asset].qty+=qty;
+    book.positions[asset].costBasis=(book.positions[asset].costBasis??0)+total;
   } else {
     // Sell dollars denotes desired net proceeds, capped by the existing position.
     qty=Math.min(book.positions[asset].qty,dollars/(p.sell*(1-p.fee)));
     if (!(qty>1e-14)) return;
     notional=qty*p.sell;fee=notional*p.fee;total=notional-fee;
+    const remaining=1-qty/book.positions[asset].qty;
+    book.positions[asset].costBasis=(book.positions[asset].costBasis??0)*remaining;
     book.positions[asset].qty-=qty;book.cash+=total;
   }
   book.cash=Math.max(0,book.cash);
-  if (book.positions[asset].qty<1e-14) book.positions[asset].qty=0;
+  if (book.positions[asset].qty<1e-14) {book.positions[asset].qty=0;book.positions[asset].costBasis=0;}
   event(a,'trade',frame.time,{actor,asset,side,qty,price:side==='buy'?p.buy:p.sell,
     fee,notional,cashDelta:side==='buy'?-total:total,quoteObservedAt:q.observedAt,
     quoteAt:iso(q.observedAt),source:q.source??'unspecified'});
@@ -93,8 +103,9 @@ function prediction(a,asset,frame) {
     seen.set(row.time,row.price);
   }
   const rows=[...seen].sort((x,y)=>x[0]-y[0]);
-  if (rows.length<8) return null;
-  const last=rows.at(-1),past=rows.at(-8),elapsed=last[0]-past[0];
+  const lookback=a.config.lookbackIntervals;
+  if (rows.length<lookback+1) return null;
+  const last=rows.at(-1),past=rows.at(-(lookback+1)),elapsed=last[0]-past[0];
   if (!(elapsed>0) || frame.time-last[0]>Math.max(120000,a.config.maxQuoteAgeMs)) return null;
   const drift=Math.max(-.03,Math.min(.03,Math.log(last[1]/past[1])*a.config.horizonMs/elapsed));
   return {anchor,prediction:anchor*Math.exp(drift),historyEnd:last[0]};
@@ -126,6 +137,23 @@ function close(a,frame,actor) {
   for (const s of ASSETS) fill(a,a,s,'sell',Number.MAX_VALUE,frame,actor);
 }
 
+function stopPositions(a,frame) {
+  const stopped=new Set();
+  if (!a.config.stopLossBps) return stopped;
+  for (const asset of ASSETS) {
+    const position=a.positions[asset],p=prices(a,frame.quotes[asset]);
+    const net=position.qty*p.sell*(1-p.fee);
+    if (position.qty>0&&position.costBasis>0&&net<=position.costBasis*(1-a.config.stopLossBps/10000)) {
+      event(a,'stop_loss',frame.time,{actor:'auto',asset,netLiquidation:net,costBasis:position.costBasis,
+        thresholdBps:a.config.stopLossBps,quoteObservedAt:frame.quotes[asset].observedAt,
+        reason:'Observed bid less modeled slippage and exit fee breached loss from fee-inclusive entry cost; no intraminute execution assumed'});
+      fill(a,a,asset,'sell',Number.MAX_VALUE,frame,'auto');stopped.add(asset);
+      position.lastStoppedAt=frame.time;
+    }
+  }
+  return stopped;
+}
+
 export function ingest(a,frame) {
   if (!frame||!finite(frame.time)) throw new Error('Invalid frame time');
   if (a.lastFrameAt!==null&&frame.time<=a.lastFrameAt) return a;
@@ -143,12 +171,14 @@ export function ingest(a,frame) {
     event(a,'gap',frame.time,{actor:'system',gapMs:frame.time-a.lastValidFrameAt,
       reason:'No intervening fills simulated; resumed at observed quotes'});
   settle(a,frame);
+  const stopped=stopPositions(a,frame);
   if (frame.time>=a.endsAt) {
     close(a,frame,'auto');a.status='completed';event(a,'complete',frame.time,{actor:'system',lateByMs:frame.time-a.endsAt});
   } else if (a.lastDecisionAt===null||frame.time-a.lastDecisionAt>=a.config.horizonMs) {
     close(a,frame,'auto');
-    const budget=a.cash/2;
+    const budget=a.cash*a.config.allocationFraction;
     for (const asset of ASSETS) {
+      if (stopped.has(asset)) {event(a,'decision_skipped',frame.time,{actor:'auto',asset,reason:'Stop loss: no same-frame reentry'});continue;}
       const pred=prediction(a,asset,frame);
       if (!pred) {event(a,'decision_skipped',frame.time,{actor:'auto',asset,reason:'Insufficient, stale or conflicting completed history'});continue;}
       const targetAt=frame.time+a.config.horizonMs;
@@ -178,6 +208,7 @@ export function manualTrade(a,asset,side,dollars,frame) {
   // frame consumes the clock. A frame already ingested by the UI is reused.
   if (a.lastFrameAt===null||frame.time>a.lastFrameAt) ingest(a,frame);
   if (frame.time>=a.endsAt) throw new Error('Paper session has ended');
+  if (side==='buy'&&a.positions[asset].lastStoppedAt===frame.time) throw new Error('Stopped asset cannot reenter in the same frame');
   fill(a,a,asset,side,dollars,frame,'manual');mark(a,frame);
   a.lastFrameAt=frame.time;a.lastValidFrameAt=frame.time;return a;
 }

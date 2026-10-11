@@ -1,58 +1,55 @@
 # Paper Trail
 
-A $1,000 **simulated** BTC/LINK account you can actually try: recorded market replay, live public quotes, a forecast ledger, explicit trading costs, and cash/buy-and-hold benchmarks.
+A browser-local BTC/LINK paper-trading experiment with configurable rules, historical replay, live public quotes and exportable run history. The default balance is **$1,000 simulated cash**. No wallet, exchange credentials or real orders are involved.
 
-**[Open the app](https://qualiarain.github.io/btc-link-paper-trader/)**
+**[Open the app](https://qualiarain.github.io/btc-link-paper-trader/)** · [Source](https://github.com/QualiaRain/btc-link-paper-trader)
 
-## Try it
+## Configure and run
 
-1. Click **Try market replay**. It starts a fresh $1,000 account using actual recorded Coinbase prices.
-2. Use **Next decision** to inspect the next forecast and any paper trades, or **Finish replay** to see the full sample.
-3. Compare the account with $1,000 cash and a 50/50 BTC/LINK buy-and-hold account. All invested values include hypothetical exit costs.
-4. **Export ledger** downloads the frozen forecasts, observations, decisions, fills, costs, settings and source evidence as JSON.
+Use the **Config**, **Run** and **History** views. These are navigation views, not an authentication or administrative security boundary.
 
-Alternatively, **Start live paper account** uses current public Coinbase bid/ask quotes. No exchange login, API key, wallet, deposit or real order is involved. Sessions run only while the page is visible, pause when the tab is hidden, and restore paused after a reload. Each browser has its own account; this is not a shared hosted ledger.
+In Config, choose starting cash, forecast horizon, trend or same-price rule, lookback intervals, entry buffer, allocation per asset, stop loss, fees, slippage and live-session duration. Defaults are $1,000 cash, a seven-minute horizon, seven lookback intervals, a ten-basis-point entry buffer, up to 50% per asset, no stop loss, ten-basis-point fees and two-basis-point slippage per fill. Ten basis points equals 0.10%.
 
-## The fixed rule
+Settings freeze when the run starts. To change them, save the current run and start another. Settings JSON can be exported and imported before starting; invalid values and unknown configuration fields are rejected before anything is applied.
 
-The default challenger estimates a 7-minute future midpoint using the log-price change over seven earlier completed observations, scaled by actual elapsed time and capped at ±0.03 log return per forecast. This is a deliberately simple price-only rule, **not a trained or validated trading model**. The earlier daily-price experiment did not establish an edge.
+- **Included sample:** try the bundled real Coinbase minute closes immediately. The first configured lookback intervals provide warmup; scored results begin afterward.
+- **UTC date range:** fetch up to 31 days of completed Coinbase minute candles. Inputs are UTC minute-close boundaries. Both BTC and LINK must contain the exact start and end; otherwise the fetch fails without creating a run. Warmup comes before the scored start and does not earn returns or enter accuracy totals. Progress and cancellation are available during retrieval.
+- **Live paper account:** poll public Coinbase bid/ask snapshots every ten seconds while this tab is visible. Live duration is configurable, defaulting to 48 hours.
 
-At each decision:
+Replay can play slowly, advance to the next decision, or finish in responsive batches. It closes positions with modeled exit costs on the exact final historical frame. Historical duration is the selected scored end minus start; live duration does not shorten a replay. Reload restores the latest saved current snapshot **paused**. Hidden tabs pause active runs. No off-tab or gap trades are invented.
 
-- Close existing paper positions at observed bid minus the slippage assumption and fees.
-- Freeze a future price forecast before observing its outcome.
-- Buy only when the estimated net upside exceeds current spread, modeled round-trip fees/slippage, and an additional 10-basis-point buffer. Otherwise keep cash.
-- Spend at most half the available account cash per asset. No short positions or leverage.
+## Rule, costs and comparisons
 
-Horizon choices: 1, 5, 7 or 15 minutes; 1 or 7 hours; or 24 hours. Settings are fixed for an account. Archive it to try different rules. The same-price baseline rule should remain in cash after costs. Manual paper orders are labeled separately and change the account’s performance, so a manually modified account is no longer a pure automatic-strategy test.
+The trend forecast uses the log-price change over the chosen number of earlier completed observations, scaled by actual elapsed time to the selected horizon and clipped to ±0.03 log return per forecast. Missing minutes are never filled. The same-price rule forecasts the current midpoint.
 
-The session limit is 48 hours from its first observed frame. Replay ends when the supplied historical sample ends, which is sooner. Remaining forecasts stay pending until qualifying later evidence exists. Live connection gaps do not create fictitious intervening trades. Closing or resuming after a target does not recreate the price that was missed.
+At each decision, the engine closes existing positions and freezes a new future forecast. It buys only when predicted upside clears spread, both modeled fees, both slippage charges and the entry buffer. Allocation uses the selected fraction of available cash per asset, up to 50%. Accounts are long only, without leverage. The stop loss checks net liquidation value against fee-inclusive position cost at observed frames; zero disables it. A gap can produce a loss larger than the selected threshold. Manual paper trades are labeled and make the result a modified strategy run.
 
-## Costs and comparisons
+Buys use ask plus slippage; sells use bid minus slippage; each pays a fee. All values include hypothetical exit costs. Replay bid/ask is constructed using the configurable **assumed half-spread** on each side of the candle close. It is not archived order-book data. Live spread comes from the public ticker.
 
-- Default fee: **10 bps per fill (0.10%)**, an editable assumption, not an exchange-specific quote.
-- Default slippage: **2 bps per fill (0.02%)**, also an assumption.
-- Replay spread: **2 bps on each side** of the actual recorded candle close; historical bid/ask was not captured.
-- Live spread: actual bid/ask returned by Coinbase’s public ticker, at local receipt time.
-- Buys use ask plus slippage; sells use bid minus slippage; fees are charged on both sides.
-- The 50/50 buy-and-hold benchmark invests $500 per asset at the same initial quotes, fees and slippage, then holds. Cash earns zero. Both invested accounts are marked at net liquidation value after modeled exit costs.
+The comparison account invests half the initial balance in BTC and half in LINK at the same first quotes and costs, then holds. Cash earns zero. A profitable replay does not establish a reliable edge. Repeatedly tuning settings against observed results can overfit them. This is a simple experimental rule, not a trained or validated trading model.
 
-Public snapshots do not establish executable fills. Latency, queue position, market impact, funding, taxes and liquidity constraints are not modeled. Millisecond trading is not supported: decimal timestamp precision does not provide a low-latency streaming feed or prove executable accuracy.
+## Saved history and exports
+
+Snapshots save on start, pause, completion, manual orders, archive and export; live runs also periodically save while active. Each run has a stable ID. Saving another snapshot updates that run rather than adding a duplicate. **History** lists full or partial status, frozen settings, account value, return, benchmark, drawdown and manual changes.
+
+Open a saved run as a **read-only snapshot**, copy its settings to a separate new run, download its settings or full evidence, or export all saved runs. The current-session pointer is small; full records use IndexedDB. Storage failures are shown explicitly and do not discard the current account. Use Export run to keep a separate copy if browser storage is unavailable or full. Browsers can evict site data, so local storage is not a backup.
+
+Run JSON includes full account/ledger/forecasts, summary, config, quote/source evidence, selected boundaries and hashes. Repeated causal history is compacted into a catalog with exact per-frame references; restoring reconstructs the original observations, including warmup and nonshared source minutes. Records are editable by their owner. Hashes help identify evidence changes; they do not make a record tamper proof or establish executable fills.
 
 ## Data and scoring
 
-Replay contains 1,648 exact shared BTC/LINK completed minute observations from October 10–11, 2026, captured on October 11. Missing shared minutes are skipped rather than filled. [Data provenance](data/README.md).
+The included sample contains real shared BTC/LINK completed minute observations from October 10–11, 2026. [Bundled provenance](data/README.md). Date-range replay retrieves the selected public source series and saves fetch evidence/coverage. Sparse shared minutes remain gaps.
 
-Live mode reads only these unauthenticated public endpoints, polling every 10 seconds:
+Public endpoints:
 
 - [Coinbase Exchange ticker](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-ticker): bid/ask, last-trade price and exchange last-trade timestamp.
-- [Coinbase Exchange candles](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-candles): completed one-minute warmup observations. Longer forecast horizons still extrapolate the same short recent trend.
+- [Coinbase Exchange candles](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-candles): completed one-minute candles.
 
-The local HTTP receipt time is the quote’s availability time; the ticker’s exchange timestamp describes the last trade, not a separately timestamped order-book update. Forecast issue/target/outcome times are saved in UTC. Forecasts score against the first qualifying subsequent midpoint, with a **30-second maximum observation lateness**. Missed targets expire and are excluded from accuracy metrics. Accuracy is reported per asset; pooled BTC/LINK dollar errors would not be a useful comparison.
+Local HTTP receipt time is quote availability time. The exchange ticker timestamp belongs to the last trade, not a separately timestamped bid/ask update. Forecasts score against the first qualifying later midpoint with a fixed **30-second maximum observation lateness**; missed targets expire and are excluded from accuracy. Errors are reported per asset. Longer horizons extrapolate a short recent trend and provide no new calibration evidence.
 
-Records are browser-local and editable by their owner; exports are transparent evidence, not a tamper-proof public audit. A good historical result or a 48-hour pilot does not establish reliable future profit.
+Public snapshots do not establish executable orders. Latency, queue position, market impact, liquidity constraints, taxes and funding are not modeled. Millisecond trading is unsupported. A good historical run or a short live pilot does not prove future profit.
 
-## Run locally
+## Local development
 
 No build or package installation is required:
 
@@ -60,14 +57,6 @@ No build or package installation is required:
 python3 -m http.server 8080 --bind 127.0.0.1
 ```
 
-Open `http://127.0.0.1:8080` in a browser. Serve the directory over HTTP; opening `index.html` as a local file will block module/data requests in many browsers.
+Open `http://127.0.0.1:8080`. Serve over HTTP; direct file URLs can block module and data requests. Evidence hashing requires HTTPS or localhost.
 
-With Node.js 22 or later:
-
-```sh
-npm test
-```
-
-`engine.js` is the pure accounting/forecast engine; `market.js` only reads public data; `app.js` manages browser-local sessions and presentation. There are no dependencies or order-submission endpoints.
-
-Built with AI assistance. Test results, assumptions and limitations are included so the claim can be checked.
+With Node.js 22 or later, run `npm test`. `engine.js` handles deterministic accounting/forecasts, `market.js` reads public data, `history.js` manages run evidence and IndexedDB, and `app.js` handles the views. There are no dependencies or order-submission endpoints.

@@ -91,3 +91,35 @@ test('manual newer frame first settles and processes due auto action exactly onc
   assert.equal(a.lastDecisionAt,T+60000);assert.equal(a.ledger.at(-1).actor,'manual');
   const before=JSON.stringify(a);ingest(a,frame(T+60000));assert.equal(JSON.stringify(a),before);
 });
+test('bounded normalized settings reject unknown fields and invalid values',()=>{
+  const a=createAccount();assert.equal(a.config.lookbackIntervals,7);assert.equal(a.config.allocationFraction,.5);assert.equal(a.config.stopLossBps,0);
+  for(const c of [{lookbackIntervals:0},{lookbackIntervals:241},{allocationFraction:.51},{stopLossBps:10000},{secret:1},{constructor:1},{feeBps:1001}])assert.throws(()=>createAccount(c));
+});
+test('allocation fraction is decision cash per asset, benchmark remains equal weighted',()=>{
+  const a=createAccount({allocationFraction:.2});ingest(a,frame());near(a.cash,600);
+  const buys=a.ledger.filter(t=>t.type==='trade'&&t.actor==='auto');assert.equal(buys.length,2);
+  buys.forEach(t=>near(-t.cashDelta,200));near(a.baseline.cash,0);
+  const b=createAccount({allocationFraction:0});ingest(b,frame());near(b.cash,1000);assert.equal(b.forecasts.length,2);
+});
+test('configured lookback selects only that many observed intervals',()=>{
+  const f=frame();for(const s of ['BTC','LINK'])f.history[s][0].price=50;
+  const a=createAccount({lookbackIntervals:3}),b=createAccount({lookbackIntervals:7});ingest(a,f);ingest(b,f);
+  near(Math.log(a.forecasts[0].prediction/100),.007);near(Math.log(b.forecasts[0].prediction/100),.03);
+});
+test('stop loss includes fees and slippage and does not assume an intraminute fill',()=>{
+  const a=createAccount({stopLossBps:100});ingest(a,frame());
+  const cost=a.positions.BTC.costBasis,qty=a.positions.BTC.qty;
+  const thresholdBid=cost*.99/(qty*.9998*.999);
+  function at(time,bid){const f=frame(time);for(const s of ['BTC','LINK'])f.quotes[s]={...f.quotes[s],bid,ask:bid+.2,mid:bid+.1};return f;}
+  ingest(a,at(T+1000,thresholdBid+.00001));assert.ok(a.positions.BTC.qty>0);
+  const f=at(T+2000,thresholdBid-.00001);ingest(a,f);near(a.positions.BTC.qty,0);
+  const stop=a.ledger.find(e=>e.type==='stop_loss'&&e.asset==='BTC');assert.equal(stop.time,T+2000);
+  const sale=a.ledger.find(e=>e.type==='trade'&&e.side==='sell'&&e.asset==='BTC');near(sale.price,f.quotes.BTC.bid*.9998);
+});
+test('stop prevents automatic and manual same-frame reentry',()=>{
+  const a=createAccount({stopLossBps:100});ingest(a,frame());
+  const f=frame(T+420000,95,.003);ingest(a,f);
+  near(a.positions.BTC.qty,0);assert.ok(a.ledger.some(e=>e.type==='decision_skipped'&&e.reason.includes('same-frame')));
+  assert.throws(()=>manualTrade(a,'BTC','buy',10,f),/same frame/);
+  const b=createAccount({stopLossBps:0});ingest(b,frame());ingest(b,frame(T+1000,50));assert.ok(b.positions.BTC.qty>0);
+});
