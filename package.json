@@ -1,0 +1,1 @@
+{"name":"btc-link-paper-trader","version":"1.0.0","private":true,"type":"module","scripts":{"test":"node --test engine.test.js"}}
