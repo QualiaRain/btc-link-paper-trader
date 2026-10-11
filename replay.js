@@ -39,12 +39,13 @@ async function request(url,signal){
   }
 }
 
-export async function fetchHistoricalRange({start,end,halfSpreadBps=2,warmupMinutes=60,historyLimit=8,signal,onProgress=()=>{}}={}){
+export async function fetchHistoricalRange({start,end,halfSpreadBps=2,warmupMinutes=60,historyLimit=8,requiredHistory=0,signal,onProgress=()=>{}}={}){
   const s=stamp(start),e=stamp(end),now=Date.now();
   if(e<=s||e-s>MAX_DAYS*86400000)throw new Error('Choose a positive range of at most 31 days');
   if(e>Math.floor(now/MINUTE)*MINUTE)throw new Error('End must be a completed UTC minute');
   if(!Number.isInteger(warmupMinutes)||warmupMinutes<1||warmupMinutes>1440)throw new Error('warmupMinutes must be 1 to 1440');
   if(!Number.isInteger(historyLimit)||historyLimit<2||historyLimit>241)throw new Error('historyLimit must be 2 to 241');
+  if(!Number.isInteger(requiredHistory)||requiredHistory<0||requiredHistory>historyLimit)throw new Error('requiredHistory must be 0 to historyLimit');
   if(warmupMinutes<historyLimit-1)throw new Error('Warmup must span at least historyLimit minus one minutes');
   if(typeof halfSpreadBps!=='number'||!Number.isFinite(halfSpreadBps)||halfSpreadBps<0||halfSpreadBps>1000)throw new Error('Invalid assumed half-spread');
   cancelled(signal);
@@ -86,6 +87,10 @@ export async function fetchHistoricalRange({start,end,halfSpreadBps=2,warmupMinu
     const error=new Error('Exact start/end close missing for one or both assets; boundaries were not changed');
     error.coverage=coverage;throw error;
   }
+  for(const asset of ASSETS){
+    const available=series[asset].filter(row=>row.time<=s).length;
+    if(available<requiredHistory)throw new Error(`${asset}: only ${available} causal observations at scored start; ${requiredHistory} required. Choose a smaller lookback or another range. No run was created.`);
+  }
   const maps=Object.fromEntries(ASSETS.map(a=>[a,new Map(series[a].map((r,i)=>[r.time,i]))]));
   const frames=[],half=halfSpreadBps/10000;
   // Store each history observation once. Lazy views avoid duplicating up to241
@@ -108,7 +113,7 @@ export async function fetchHistoricalRange({start,end,halfSpreadBps=2,warmupMinu
       warmup:'Only frame.history includes pre-start observations; eight observations needed for default trend, 241 for maximum lookback.',
       execution:'Hypothetical fills omit latency, market impact, liquidity and queue position.'},
     documentation:{candles:DOC},
-    evidence:{requestedStart:s,requestedEnd:e,warmupMinutes,historyLimit,retrievalElapsedMs:Date.now()-began,
+    evidence:{requestedStart:s,requestedEnd:e,warmupMinutes,historyLimit,requiredHistory,retrievalElapsedMs:Date.now()-began,
       sharedCount:frames.length,prices:series,rawResponses:rawReceipts,
       storage:'Compact prices and raw responses preserve source evidence. Frames expose lazy history views; export evidence instead of JSON-stringifying all frames.'}};
 }

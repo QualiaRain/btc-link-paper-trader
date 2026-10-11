@@ -72,7 +72,8 @@ async function start(mode){
     }else if(nextSettings.replay.source==='range'){
       kind='historical';fetchController=new AbortController();$('fetch-state').hidden=false;
       nextDataset=await fetchHistoricalRange({start:utcMinute(nextSettings.replay.start),end:utcMinute(nextSettings.replay.end),halfSpreadBps:nextSettings.replay.halfSpreadBps,
-        warmupMinutes:Math.max(60,config.lookbackIntervals+2),historyLimit:config.lookbackIntervals+1,signal:fetchController.signal,
+        warmupMinutes:Math.max(60,2*config.lookbackIntervals+10),historyLimit:config.lookbackIntervals+1,
+        requiredHistory:config.model==='trend'?config.lookbackIntervals+1:0,signal:fetchController.signal,
         onProgress:p=>{$('fetch-label').textContent=p.message??`${p.asset??''} ${p.phase??'Fetching'} · ${p.completed??0}/${p.total??'?'}`;$('fetch-progress').max=p.total||1;$('fetch-progress').value=p.completed||0;}});
       if(fetchController.signal.aborted)throw new Error('Historical fetch canceled.');
       nextFrame=nextDataset.frames[0];
