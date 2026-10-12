@@ -5,6 +5,7 @@
 // with the TypeScript client/UI, so agreement between them is real evidence of parity.
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {candleRows, type Gaps} from './fake-exchange.ts';
 import {repo} from './server.ts';
 
 type Json = any; // the root modules are untyped JavaScript
@@ -86,9 +87,15 @@ export async function createOracle(request: {config?: object; replay?: object} =
     }
     return {time, quotes, history: {BTC: histories['BTC']!.slice(), LINK: histories['LINK']!.slice()}};
   });
-  const config = {...settings.config};
-  let cursor = config.lookbackIntervals as number; // app.js start(): nextCursor = lookbackIntervals
-  assert.ok(cursor < frames.length - 1, 'sample too short for this lookback');
+  const lookback = settings.config.lookbackIntervals as number; // app.js start(): nextCursor = lookbackIntervals
+  assert.ok(lookback < frames.length - 1, 'sample too short for this lookback');
+  return buildOracle(engine, settings.config, frames, lookback);
+}
+
+/** app.js start(): freeze the config with the scored duration, create the account and ingest the first scored frame. */
+function buildOracle(engine: Engine, baseConfig: Json, frames: Json[], startCursor: number): Oracle {
+  const config = {...baseConfig};
+  let cursor = startCursor;
   const scoreStart = frames[cursor]!.time, scoreEnd = frames.at(-1)!.time;
   config.durationMs = scoreEnd - scoreStart;
   const account = engine.createAccount(config);
@@ -185,4 +192,38 @@ export function observe(state: {currentFrame: {time: number}; cursor: number; st
   return {time: state.currentFrame.time, cursor: state.cursor, status: state.status, cash: s.cash,
     qty: {BTC: s.perAsset.BTC.qty, LINK: s.perAsset.LINK.qty}, equity: s.equity, buyHold: s.buyHoldEquity, fees: s.fees,
     tradeCount: s.tradeCount, ...(ledger ? {ledgerCounts: counts} : {})};
+}
+
+export interface RangeOracle extends Oracle {
+  /** Requests the root replay.js made to the stubbed exchange (one per chunk and asset). */
+  readonly fetchCount: number;
+  readonly dataset: Json;
+}
+
+/**
+ * A date-range replay built the way app.js start() builds one: the ROOT replay.js `fetchHistoricalRange` retrieves the
+ * series (global fetch stubbed to the same deterministic exchange series the fake server serves, like
+ * parity/harness.mjs), then the root engine.js replays it. `request.replay` must have source 'range'.
+ */
+export async function createRangeOracle(request: {config?: object; replay: {source: 'range'; start: string; end: string; halfSpreadBps?: number}}, gaps: Gaps = {}): Promise<RangeOracle> {
+  const {engine, configuration} = await load();
+  const replayModule = await import(repo('replay.js')) as {fetchHistoricalRange(options: object): Promise<Json>};
+  const settings = configuration.normalizeSettings({config: {}, ...request});
+  const config = settings.config;
+  let fetchCount = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL) => {
+    const u = new URL(String(url)), asset = u.pathname.includes('LINK-USD') ? 'LINK' : 'BTC';
+    fetchCount++;
+    const rows = candleRows(asset, Date.parse(u.searchParams.get('start')!), Date.parse(u.searchParams.get('end')!), gaps);
+    return {ok: true, status: 200, headers: new Headers(), text: async () => JSON.stringify(rows)};
+  }) as typeof fetch;
+  let dataset: Json;
+  try {
+    dataset = await replayModule.fetchHistoricalRange({start: Date.parse(`${settings.replay.start}:00Z`), end: Date.parse(`${settings.replay.end}:00Z`),
+      halfSpreadBps: settings.replay.halfSpreadBps, warmupMinutes: Math.max(60, 2 * config.lookbackIntervals + 10), historyLimit: config.lookbackIntervals + 1,
+      requiredHistory: config.model === 'trend' ? config.lookbackIntervals + 1 : 0});
+  } finally { globalThis.fetch = original; }
+  const oracle = buildOracle(engine, config, dataset.frames, 0);
+  return Object.assign(oracle, {fetchCount, dataset});
 }

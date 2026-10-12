@@ -23,14 +23,16 @@ export interface Seen {
   /** Parsed JSON responses of session endpoints. */
   responses: {method: string; url: string; request: string | null; body: any}[];
   maxAdvanceInFlight: number;
+  maxTickInFlight: number;
   advanceBodies: any[];
 }
 
-export async function openPage(browser: Browser, api: RunningApi, existing?: Page): Promise<{page: Page; seen: Seen}> {
-  const page = existing ?? await browser.newPage({acceptDownloads: true});
-  const seen: Seen = {order: [], responses: [], maxAdvanceInFlight: 0, advanceBodies: []};
-  let inFlight = 0;
+export async function openPage(browser: Browser, api: RunningApi, options: {query?: string} = {}): Promise<{page: Page; seen: Seen}> {
+  const page = await browser.newPage({acceptDownloads: true});
+  const seen: Seen = {order: [], responses: [], maxAdvanceInFlight: 0, maxTickInFlight: 0, advanceBodies: []};
+  let inFlight = 0, ticksInFlight = 0;
   page.on('request', request => {
+    if (request.url().endsWith('/tick')) seen.maxTickInFlight = Math.max(seen.maxTickInFlight, ++ticksInFlight);
     if (!request.url().includes('/v1/')) return;
     seen.order.push(`${request.method()} ${new URL(request.url()).pathname}`);
     if (request.url().endsWith('/advance')) {
@@ -38,15 +40,15 @@ export async function openPage(browser: Browser, api: RunningApi, existing?: Pag
       seen.maxAdvanceInFlight = Math.max(seen.maxAdvanceInFlight, ++inFlight);
     }
   });
-  page.on('requestfinished', request => { if (request.url().endsWith('/advance')) inFlight--; });
-  page.on('requestfailed', request => { if (request.url().endsWith('/advance')) inFlight--; });
+  page.on('requestfinished', request => { if (request.url().endsWith('/advance')) inFlight--; if (request.url().endsWith('/tick')) ticksInFlight--; });
+  page.on('requestfailed', request => { if (request.url().endsWith('/advance')) inFlight--; if (request.url().endsWith('/tick')) ticksInFlight--; });
   page.on('response', async response => {
     if (!response.url().includes('/v1/sessions')) return;
     let body: any;
     try { body = await response.json(); } catch { body = undefined; }
     seen.responses.push({method: response.request().method(), url: response.url(), request: response.request().postData(), body});
   });
-  await page.goto(api.baseUrl);
+  await page.goto(api.baseUrl + (options.query ?? ''));
   await connected(page);
   return {page, seen};
 }
@@ -208,3 +210,10 @@ export async function assertRunPanels(page: Page, truth: PanelsTruth, label: str
   assert.equal(ui.ledger.decisions, rows.filter(e => e.type === 'decision').length, `${label}: decisions`);
   return ui;
 }
+
+/** Pretend the tab is hidden or visible again (what a real tab switch does to document.visibilityState). */
+export const setVisibility = (page: Page, hidden: boolean) => page.evaluate(h => {
+  Object.defineProperty(document, 'visibilityState', {value: h ? 'hidden' : 'visible', configurable: true});
+  Object.defineProperty(document, 'hidden', {value: h, configurable: true});
+  document.dispatchEvent(new Event('visibilitychange'));
+}, hidden);

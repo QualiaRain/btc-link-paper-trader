@@ -33,3 +33,6 @@ label.inline{flex-direction:row;align-items:center;gap:8px}label.inline input{mi
 .table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:.85rem}th,td{padding:5px 8px;text-align:left;border-top:1px solid var(--line);vertical-align:top}th.numeric{text-align:right}.empty-row{color:var(--muted)}
 .history-card{margin:12px 0}.history-card h3{margin:0 0 4px;font-size:1rem}.history-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin:8px 0}.history-metrics span{display:block;font-size:.75rem;color:var(--muted)}
 #snapshot-banner{border-color:var(--hold)}
+.range-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.fetch-state{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0}.fetch-state p{margin:0;flex:1 1 100%}.fetch-state progress{flex:1 1 200px}
+[hidden]{display:none!important}

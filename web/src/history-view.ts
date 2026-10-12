@@ -5,7 +5,6 @@ import {ApiError, PaperTrailClient, type RunMetadata, type Settings} from './cli
 import {el, money, utc, utcIso} from './format.ts';
 import type {SessionView} from './session-view.ts';
 import type {SnapshotView} from './snapshot-view.ts';
-import {assertSupported} from './settings-draft.ts';
 import type {Workspace} from './workspace.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -106,7 +105,6 @@ export class HistoryView {
       let settings: Settings;
       try { settings = await client.exportSettings(id); } catch (error) { this.#deps.notify((error as Error).message, true); return; }
       if ((sessions.session?.id ?? null) !== owner) { this.#deps.notify('The session changed while the settings were loading, so nothing was applied.', true); return; }
-      try { assertSupported(settings); } catch (error) { this.#deps.notify(`Settings were not applied: ${(error as Error).message}`, true); return; }
       if (sessions.session && !(await sessions.archive())) { this.#deps.notify('The current session could not be saved, so it was left open and nothing was applied.', true); return; }
       this.#deps.snapshots.close();
       const name = (await client.listRuns()).find(run => run.id === id)?.name ?? '';

@@ -28,9 +28,16 @@
     <div class="actions">
       <label class="inline">Run name<input id="name" type="text" maxlength="100" placeholder="Optional" autocomplete="off"></label>
       <button type="button" id="s-start" class="primary">Start session</button>
+      <button type="button" id="s-start-live">Start live paper session</button>
       <button type="button" id="s-archive" disabled>Save &amp; start another</button>
       <button type="button" id="s-close" disabled>Close session</button>
     </div>
+    <div id="fetch-state" class="fetch-state" hidden>
+      <p id="fetch-label" class="small" role="status"></p>
+      <progress id="fetch-progress" value="0" max="1"></progress>
+      <button type="button" id="fetch-cancel">Cancel fetch</button>
+    </div>
+    <p id="fetch-summary" class="muted small"></p>
     <p id="s-empty" class="muted">Start a session to step through the included sample one frame or one decision at a time, or open a saved run from History.</p>
     <p id="s-background" class="muted" hidden>A live session is paused in the background while you view a read-only snapshot. Close the snapshot to return to it.</p>
     <div id="s-state" hidden>
@@ -53,7 +60,9 @@
         <div class="asset"><strong>LINK</strong> <span id="s-price-LINK"></span> <span class="muted small">position <span id="s-qty-LINK"></span></span>
           <div class="actions"><button type="button" id="s-buy-LINK" disabled>Buy $100</button><button type="button" id="s-sell-LINK" disabled>Sell all</button></div></div>
       </div>
+      <p id="s-live-note" class="muted small" hidden></p>
       <div class="actions">
+        <button type="button" id="s-tick" disabled hidden>Tick now</button>
         <button type="button" id="s-next-frame" disabled>Next frame</button>
         <button type="button" id="s-next-decision" disabled>Next decision</button>
         <button type="button" id="s-play" disabled>Play</button>
@@ -81,6 +90,13 @@
         <label>Fee per fill (bps)<input id="feeBps" type="number" min="0" step="any"></label>
         <label>Slippage per fill (bps)<input id="slippageBps" type="number" min="0" step="any"></label>
         <label>Assumed half-spread (bps)<input id="halfSpreadBps" type="number" min="0" step="any"></label>
+        <label>Replay source<select id="replaySource"><option value="sample">Included sample</option><option value="range">UTC date range (fetched by the server)</option></select></label>
+        <label>Live duration (hours)<input id="liveHours" type="number" min="0.01" step="any"></label>
+        <div id="range-fields" class="wide range-fields" hidden>
+          <label>Start (UTC minute)<input id="rangeStart" type="datetime-local" step="60"></label>
+          <label>End (UTC minute)<input id="rangeEnd" type="datetime-local" step="60"></label>
+          <p class="muted small wide">The server fetches public one-minute closes for both assets (at most 31 days, ending at a completed minute). No run is created until both assets and both boundaries are validated; missing minutes are reported, never filled.</p>
+        </div>
         <div class="actions wide">
           <button type="submit" id="run" class="primary">Run replay of included sample</button>
           <label class="file">Import settings JSON<input id="settings-file" type="file" accept="application/json"></label>

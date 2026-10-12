@@ -25,13 +25,13 @@ export interface RunningApi {
 }
 
 /** Needs `python3` with the backend installed (override with $PYTHON). Serves web/public too. */
-export async function startApi(): Promise<RunningApi> {
+export async function startApi(options: {env?: Record<string, string>} = {}): Promise<RunningApi> {
   const port = await freePort();
   const dataDir = mkdtempSync(join(tmpdir(), 'paper-trail-test-'));
   let log = '';
   const server: ChildProcess = spawn(process.env['PYTHON'] ?? 'python3',
     ['-m', 'uvicorn', '--factory', 'paper_trail.api:create_app', '--host', '127.0.0.1', '--port', String(port)], {
-      cwd: repo('backend'), env: {...process.env, PAPER_TRAIL_DATA_DIR: dataDir, PYTHONDONTWRITEBYTECODE: '1'}, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: repo('backend'), env: {...process.env, PAPER_TRAIL_DATA_DIR: dataDir, PYTHONDONTWRITEBYTECODE: '1', ...options.env}, stdio: ['ignore', 'pipe', 'pipe'],
     });
   server.stdout?.on('data', chunk => { log += String(chunk); });
   server.stderr?.on('data', chunk => { log += String(chunk); });

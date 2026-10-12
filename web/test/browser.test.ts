@@ -114,7 +114,7 @@ describe('settings survive the UI round trip (real Chromium, real Python API)', 
     } finally { await page.close(); }
   });
 
-  it('rejects date-range settings before applying anything, and then still runs the earlier settings as a sample', async t => {
+  it('applies date-range settings and sends them to the candle job; the one-shot replay stays a sample', async t => {
     if (skipUnlessBrowser(t)) return;
     const page = await openPage();
     try {
@@ -122,26 +122,56 @@ describe('settings survive the UI round trip (real Chromium, real Python API)', 
       await waitNotice(page, 'Settings validated');
       await page.setInputFiles('#settings-file', settingsFile({horizonMs: 60000, feeBps: 99},
         {source: 'range', start: '2024-03-09T12:00', end: '2024-03-09T13:00', halfSpreadBps: 2}));
-      await waitNotice(page, 'Settings were not applied');
-      assert.match(await notice(page), /only replays the included sample.*range.*not supported yet.*nothing was applied/i);
-      assert.equal(await page.inputValue('#horizonMs'), '900000');
-      assert.equal(await page.inputValue('#feeBps'), '10');
+      await page.waitForFunction(() => (document.getElementById('replaySource') as HTMLSelectElement).value === 'range');
+      assert.equal(await page.inputValue('#replaySource'), 'range');
+      assert.equal(await page.inputValue('#rangeStart'), '2024-03-09T12:00');
+      assert.equal(await page.inputValue('#rangeEnd'), '2024-03-09T13:00');
+      assert.equal(await page.locator('#range-fields').isVisible(), true);
+      assert.equal(await page.inputValue('#horizonMs'), '60000');
+      assert.equal(await page.inputValue('#feeBps'), '99');
+      assert.equal(await page.locator('#s-start').innerText(), 'Fetch & start replay');
+      // The range is what the start button sends (the request is intercepted: no exchange is configured here).
+      let jobRequest: any;
+      await page.route('**/v1/candle-jobs', async route => {
+        jobRequest = route.request().postDataJSON();
+        await route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'invalid_request', message: 'stubbed: nothing was fetched'}})});
+      });
+      await page.click('#s-start');
+      await page.waitForFunction(() => document.getElementById('s-notice')!.textContent!.includes('stubbed: nothing was fetched'));
+      assert.deepEqual(jobRequest, {start: '2024-03-09T12:00', end: '2024-03-09T13:00', lookbackIntervals: 7, model: 'trend'});
+      assert.equal(await page.locator('#session-panel').getAttribute('data-status'), 'none', 'no session was created');
+      // The earlier import was replaced completely; the one-shot replay still replays the included sample with the applied costs.
       const record = await runAndExport(page);
-      assert.equal(record.config.maxQuoteAgeMs, 45000);
-      assert.equal(record.config.horizonMs, 900000);
+      assert.equal(record.config.maxQuoteAgeMs, 60000);
+      assert.equal(record.config.horizonMs, 60000);
+      assert.equal(record.config.feeBps, 99);
       assert.equal(record.market.settings.replay.source, 'sample');
       assert.equal(record.market.kind, 'sample');
     } finally { await page.close(); }
   });
 
-  it('rejects live-session settings clearly instead of failing at run time', async t => {
+  it('applies live-session settings and enables the live start with them', async t => {
     if (skipUnlessBrowser(t)) return;
     const page = await openPage();
     try {
-      await page.setInputFiles('#settings-file', settingsFile({mode: 'live', feeBps: 99}));
-      await waitNotice(page, 'Settings were not applied');
-      assert.match(await notice(page), /replays only|only runs replays/i);
-      assert.equal(await page.inputValue('#feeBps'), '10');
+      await page.setInputFiles('#settings-file', settingsFile({mode: 'live', feeBps: 99, durationMs: 7200000}));
+      await waitNotice(page, 'Settings validated');
+      assert.match(await notice(page), /live-session settings.*Start live paper session/);
+      assert.equal(await page.inputValue('#feeBps'), '99');
+      assert.equal(await page.inputValue('#liveHours'), '2');
+      assert.equal(await page.locator('#s-start-live').isEnabled(), true);
+      // Intercepted: the point is what the live start sends, not a real exchange read.
+      let created: any;
+      await page.route('**/v1/sessions', async route => {
+        created = route.request().postDataJSON();
+        await route.fulfill({status: 502, contentType: 'application/json', body: JSON.stringify({error: {code: 'live_unavailable', message: 'stubbed exchange'}})});
+      });
+      await page.click('#s-start-live');
+      await page.waitForFunction(() => document.getElementById('s-notice')!.textContent!.startsWith('Live quotes unavailable'));
+      assert.equal(created.settings.config.mode, 'live');
+      assert.equal(created.settings.config.feeBps, 99);
+      assert.equal(created.settings.config.durationMs, 7200000);
+      assert.equal(created.candleJobId, undefined);
     } finally { await page.close(); }
   });
 });

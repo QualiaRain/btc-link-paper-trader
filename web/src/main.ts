@@ -4,9 +4,12 @@ import {RunPanels} from './run-panels.ts';
 import {SessionView} from './session-view.ts';
 import {SnapshotView} from './snapshot-view.ts';
 import {Workspace, currentRun as pointer} from './workspace.ts';
-import {EDITABLE_FIELDS, SettingsDraft, assertSupported, percent, type EditableField} from './settings-draft.ts';
+import {EDITABLE_FIELDS, SettingsDraft, hoursOf, percent, type EditableField, type RequestOptions} from './settings-draft.ts';
 
-const client = new PaperTrailClient({baseUrl: new URLSearchParams(location.search).get('api') ?? ''});
+const query = new URLSearchParams(location.search);
+const client = new PaperTrailClient({baseUrl: query.get('api') ?? ''});
+/** `?liveTickMs=<n>` shortens the live tick interval (tests); the default is 10 s. */
+const liveTickMs = Math.max(50, Number(query.get('liveTickMs')) || 10_000);
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const money = (n: number): string => n.toLocaleString('en-US', {style: 'currency', currency: 'USD'});
 const pct = (n: number): string => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)}%`;
@@ -44,7 +47,6 @@ function download(payload: unknown, name: string): void {
 
 /** Validates, then makes `settings` the base of the draft and shows it. Throws before touching anything. */
 function applySettings(settings: Settings): void {
-  assertSupported(settings);
   draft.replaceBase(settings);
   const c = settings.config;
   for (const key of FIELDS) $<HTMLInputElement>(key).value = String(c[key]);
@@ -52,9 +54,19 @@ function applySettings(settings: Settings): void {
   $<HTMLSelectElement>('model').value = c.model;
   $<HTMLInputElement>('allocation').value = percent(c.allocationFraction);
   $<HTMLInputElement>('halfSpreadBps').value = String(settings.replay.halfSpreadBps);
+  $<HTMLSelectElement>('replaySource').value = settings.replay.source;
+  $<HTMLInputElement>('rangeStart').value = settings.replay.start;
+  $<HTMLInputElement>('rangeEnd').value = settings.replay.end;
+  $<HTMLInputElement>('liveHours').value = hoursOf(c.durationMs);
+  rangeVisibility();
 }
 
-const readSettings = (): SettingsInput => draft.request(field => $<HTMLInputElement | HTMLSelectElement>(field).value);
+function rangeVisibility(): void {
+  $('range-fields').hidden = $<HTMLSelectElement>('replaySource').value !== 'range';
+  sessions?.refreshLabels();
+}
+
+const readSettings = (options: RequestOptions = {}): SettingsInput => draft.request(field => $<HTMLInputElement | HTMLSelectElement>(field).value, options);
 
 function showResult(run: RunMetadata): void {
   currentRun = run.id;
@@ -89,6 +101,7 @@ async function main(): Promise<void> {
   }));
   draft = new SettingsDraft(defaults.settings);
   applySettings(defaults.settings);
+  $('replaySource').addEventListener('change', rangeVisibility);
   for (const field of EDITABLE_FIELDS) {
     const mark = (): void => draft.markEdited(field as EditableField);
     $(field).addEventListener('input', mark);
@@ -98,7 +111,8 @@ async function main(): Promise<void> {
   const panels = new RunPanels();
   const runName = (): string | null => $<HTMLInputElement>('name').value.trim() || null;
   sessions = new SessionView({
-    client, panels, workspace, readSettings, runName, download, onSaved: refreshHistory,
+    client, panels, workspace, readSettings, runName, download, onSaved: refreshHistory, liveTickMs,
+    replaySource: () => ($<HTMLSelectElement>('replaySource').value === 'range' ? 'range' : 'sample'),
     onStarted: () => { snapshots.close(); showView('run'); },
     requestArchive: () => void archive(workspace, panels),
   });
@@ -120,7 +134,7 @@ async function main(): Promise<void> {
       button.disabled = true;
       try {
         notify('Running replay on the Python backend…');
-        const result = await client.createReplay({settings: readSettings(), name: $<HTMLInputElement>('name').value.trim() || null});
+        const result = await client.createReplay({settings: readSettings({mode: 'replay', source: 'sample'}), name: $<HTMLInputElement>('name').value.trim() || null});
         showResult(result.run);
         await refreshHistory();
         notify(`Replay complete: ${result.summary.tradeCount} paper trades, ${result.summary.settledForecasts} scored forecasts. Saved to run history.`);
@@ -146,8 +160,10 @@ async function main(): Promise<void> {
     try {
       if (file.size > 1_000_000) throw new Error('Settings file is too large. Import a settings JSON file under 1 MB.');
       const normalized = await client.normalizeSettings(JSON.parse(await file.text()) as SettingsInput);
-      applySettings(normalized); // rejects unsupported settings before anything changes
-      notify('Settings validated by the API and applied. No run has started.');
+      applySettings(normalized);
+      notify(normalized.config.mode === 'live'
+        ? 'Settings validated by the API and applied. They are live-session settings: use “Start live paper session”. No run has started.'
+        : 'Settings validated by the API and applied. No run has started.');
     } catch (error) {
       notify(`Settings were not applied: ${error instanceof Error ? error.message : String(error)}`, true);
     } finally { input.value = ''; }

@@ -6,7 +6,8 @@
 //  * manual orders and stepping happen only while paused, idle and outside an exclusive transition
 //    (history actions, archiving) and never while a read-only snapshot is on screen;
 //  * a stale_session conflict refetches state and tells the person; the action is never retried.
-import {ApiError, PaperTrailClient, type Account, type Advance, type LedgerEvent, type Order, type SessionState, type SettingsInput} from './client.ts';
+import {ApiError, PaperTrailClient, type Account, type Advance, type CandleJob, type LedgerEvent, type Order, type SessionState, type SessionStep, type SettingsInput} from './client.ts';
+import type {RequestOptions} from './settings-draft.ts';
 import {el, money, utc} from './format.ts';
 import type {RunPanels} from './run-panels.ts';
 import {currentRun, type Workspace} from './workspace.ts';
@@ -16,6 +17,7 @@ const PLAY_FRAMES = 8;
 const PLAY_DELAY_MS = 100;
 const PLAY_SYNC_MS = 400; // while playing, the full account is refetched at most this often
 const ACTIVITY_LIMIT = 60;
+const JOB_POLL_MS = 500;
 
 const clockTime = (ms: number): string => new Date(ms).toISOString().slice(11, 19);
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -26,8 +28,12 @@ export interface SessionViewDeps {
   client: PaperTrailClient;
   panels: RunPanels;
   workspace: Workspace;
-  /** The settings the form would send (sample replay only). May throw a readable Error. */
-  readSettings(): SettingsInput;
+  /** The settings the form would send for a start button. May throw a readable Error (e.g. an incomplete date range). */
+  readSettings(options: RequestOptions): SettingsInput;
+  /** Which replay source the form currently selects (decides the start button's label). */
+  replaySource(): 'sample' | 'range';
+  /** Live tick interval in ms (10 s unless overridden for tests). */
+  liveTickMs: number;
   runName(): string | null;
   download(payload: unknown, name: string): void;
   /** Called after a snapshot reached run history. */
@@ -57,11 +63,17 @@ export class SessionView {
   #snapshotOpen = false;
   #activity: string[] = [];
   #idleWaiters: (() => void)[] = [];
+  #fetch: {id: string; cancelled: boolean} | null = null;
+  #liveRunning = false;
+  #liveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(deps: SessionViewDeps) {
     this.#deps = deps;
     const on = (id: string, action: () => unknown): void => $(id).addEventListener('click', () => void Promise.resolve(action()).catch(error => this.#fail(error)));
-    on('s-start', () => this.start());
+    on('s-start', () => this.start('replay'));
+    on('s-start-live', () => this.start('live'));
+    on('s-tick', () => this.#tick('Tick now'));
+    on('fetch-cancel', () => this.#cancelFetch());
     on('s-next-frame', () => this.#advance({mode: 'frames', count: 1}, 'Next frame'));
     on('s-next-decision', () => this.#advance({mode: 'decision'}, 'Next decision'));
     on('s-play', () => this.togglePlay());
@@ -75,6 +87,7 @@ export class SessionView {
       on(`s-sell-${asset}`, () => this.#order({asset, side: 'sell'}));
     }
     deps.workspace.onChange(() => this.#render());
+    document.addEventListener('visibilitychange', () => this.#visibilityChanged());
     this.#render();
   }
 
@@ -101,7 +114,7 @@ export class SessionView {
     const current = this.#session;
     if (!current || state.id !== current.id || state.version < current.version) return;
     this.#session = state;
-    if (state.status !== 'active') this.#stopPlay();
+    if (state.status !== 'active') { this.#stopPlay(); this.#stopLive(); }
   }
   #stopPlay(): void {
     this.#playing = false;
@@ -116,13 +129,14 @@ export class SessionView {
   }
   /** Stop playing (if it is) and wait for the in-flight tick to land. */
   async pause(): Promise<void> {
+    this.#stopLive();
     if (this.#playing) { this.#stopPlay(); this.#pauseRequested = true; this.#render(); }
     await this.whenIdle();
   }
 
   setSnapshotOpen(open: boolean): void {
     this.#snapshotOpen = open;
-    if (open) this.#stopPlay();
+    if (open) { this.#stopPlay(); this.#stopLive(); }
     else this.#paint();
     this.#render();
   }
@@ -131,11 +145,12 @@ export class SessionView {
   #paint(): void {
     const s = this.#session, account = this.#account;
     if (this.#snapshotOpen || !s || !account) return;
-    const mode = s.status === 'completed' ? 'complete' : this.#playing ? 'running' : 'paused';
+    const live = s.kind === 'live';
+    const mode = s.status === 'completed' ? 'complete' : (live ? this.#liveRunning : this.#playing) ? 'running' : 'paused';
     this.#deps.panels.show({
       name: this.#runName || `Session ${s.runId.slice(0, 8)}`,
-      badge: `${s.kind === 'sample' ? 'Sample replay' : 'UTC replay'} · ${mode}`,
-      detail: `${s.summary.tradeCount} fills · ${s.config.model} · ${s.config.horizonMs / 60000} min horizon · ${utc(s.scoreStart)} → ${utc(s.scoreEnd)} · clock ${utc(s.currentFrame.time)}`,
+      badge: `${live ? 'Live paper' : s.kind === 'sample' ? 'Sample replay' : 'UTC replay'} · ${mode}`,
+      detail: `${s.summary.tradeCount} fills · ${s.config.model} · ${s.config.horizonMs / 60000} min horizon · ${utc(s.scoreStart)} → ${utc(s.scoreEnd)} · ${live ? 'latest quotes' : 'clock'} ${utc(s.currentFrame.time)}`,
       account, summary: s.summary, quotes: s.currentFrame.quotes,
     });
   }
@@ -144,7 +159,7 @@ export class SessionView {
   async #sync(force: boolean): Promise<void> {
     const s = this.#session;
     if (!s) return;
-    if (!force && this.#playing && Date.now() - this.#lastSync < PLAY_SYNC_MS) return;
+    if (!force && (this.#playing || this.#liveRunning) && Date.now() - this.#lastSync < PLAY_SYNC_MS) return;
     const generation = this.#generation;
     this.#syncing = true;
     try {
@@ -172,18 +187,28 @@ export class SessionView {
   }
 
   // ---- start / close / reattach ---------------------------------------------------------------
-  async start(): Promise<void> {
+  async start(kind: 'replay' | 'live' = 'replay'): Promise<void> {
     if (this.#creating || this.#deps.workspace.locked) return;
     let settings: SettingsInput;
-    try { settings = this.#deps.readSettings(); } catch (error) { this.#fail(error); return; }
+    try { settings = this.#deps.readSettings({mode: kind}); } catch (error) { this.#fail(error); return; }
+    const range = kind === 'replay' && settings.replay?.source === 'range';
     const previous = this.#session;
     const generation = ++this.#generation; // invalidates every in-flight operation of the old session
     this.#stopPlay();
+    this.#stopLive();
     this.#busy = false;
     this.#syncing = false;
     this.#creating = true;
+    $('fetch-summary').textContent = '';
     this.#render();
     try {
+      let candleJobId: string | undefined;
+      if (range) {
+        // The old session (if any) stays as it is until the candles are in hand; nothing can step it meanwhile.
+        const job = await this.#fetchCandles(settings, generation);
+        if (!job || generation !== this.#generation) return;
+        candleJobId = job;
+      }
       if (previous) {
         this.#notice('Closing the previous session…');
         try { await this.#deps.client.closeSession(previous.id); }
@@ -198,8 +223,8 @@ export class SessionView {
         this.#account = null;
         this.#render();
       }
-      this.#notice('Starting a stepwise session on the Python backend…');
-      const state = await this.#deps.client.createSession({settings, name: this.#deps.runName()});
+      this.#notice(kind === 'live' ? 'Starting a live paper session (fetching fresh public quotes)…' : 'Starting a stepwise session on the Python backend…');
+      const state = await this.#deps.client.createSession({settings, name: this.#deps.runName(), ...(candleJobId ? {candleJobId} : {})});
       if (generation !== this.#generation) {
         void this.#deps.client.closeSession(state.id).catch(() => undefined); // never leave an unowned session behind
         return;
@@ -209,22 +234,74 @@ export class SessionView {
       this.#runName = this.#deps.runName() ?? '';
       this.#activity = [];
       currentRun.write({runId: state.runId, sessionId: state.id, name: this.#runName});
-      this.#log(`${this.#stamp(state)} Session started at the first scored frame`);
+      this.#log(`${this.#stamp(state)} ${state.kind === 'live' ? 'Live session started at the first observed quotes' : 'Session started at the first scored frame'}`);
       this.#snapshotOpen = false;
       this.#deps.onStarted();
       await this.#sync(true);
-      this.#notice(`Session started at ${utc(state.currentFrame.time)}. Warmup is excluded; later frames stay hidden until you advance.`);
+      this.#notice(state.kind === 'live'
+        ? `Live paper session started at ${utc(state.currentFrame.time)}. Fresh public quotes are fetched by the server every ${this.#deps.liveTickMs / 1000} s while this tab is visible.`
+        : `Session started at ${utc(state.currentFrame.time)}. Warmup is excluded; later frames stay hidden until you advance.`);
+      if (state.kind === 'live') this.#startLive();
     } catch (error) {
-      if (generation === this.#generation) this.#fail(error);
+      if (generation !== this.#generation) return;
+      if (error instanceof ApiError && error.code === 'live_unavailable') this.#notice(`Live quotes unavailable: ${error.message}. No live session was started.`, true);
+      else this.#fail(error);
     } finally {
       if (generation === this.#generation) { this.#creating = false; this.#render(); }
     }
+  }
+
+  // ---- date-range retrieval (candle job) -------------------------------------------------------------
+  /** Runs a candle job to completion, showing progress. Returns the job id, or null (with a notice) if it was cancelled, failed or superseded. */
+  async #fetchCandles(settings: SettingsInput, generation: number): Promise<string | null> {
+    const {client} = this.#deps;
+    const replay = settings.replay ?? {};
+    const job = await client.createCandleJob({start: replay.start ?? '', end: replay.end ?? '',
+      lookbackIntervals: settings.config.lookbackIntervals ?? 7, model: settings.config.model ?? 'trend'});
+    const handle = {id: job.id, cancelled: false};
+    this.#fetch = handle;
+    $('fetch-state').hidden = false;
+    try {
+      let state: CandleJob = job;
+      for (;;) {
+        this.#showProgress(state);
+        if (generation !== this.#generation) { void client.cancelCandleJob(job.id).catch(() => undefined); return null; }
+        if (state.status !== 'running') break;
+        await sleep(JOB_POLL_MS);
+        state = await client.getCandleJob(job.id);
+      }
+      if (state.status === 'cancelled' || handle.cancelled) { this.#notice('Historical fetch canceled. No run was created.'); return null; }
+      if (state.status === 'failed') { this.#notice(`Historical fetch failed: ${state.error ?? 'unknown error'}. No run was created.`, true); return null; }
+      const coverage = (state.coverage ?? {}) as Record<string, {expectedCount?: number; observedCount?: number; missingCount?: number}>;
+      $('fetch-summary').textContent = `Retrieved ${state.receipts.length} request${state.receipts.length === 1 ? '' : 's'} · `
+        + (['BTC', 'LINK'] as const).map(a => `${a} ${coverage[a]?.observedCount ?? '?'} of ${coverage[a]?.expectedCount ?? '?'} minutes (${coverage[a]?.missingCount ?? '?'} missing)`).join(' · ');
+      return job.id;
+    } finally {
+      if (this.#fetch === handle) this.#fetch = null;
+      $('fetch-state').hidden = true;
+    }
+  }
+
+  #showProgress(job: CandleJob): void {
+    const bar = $<HTMLProgressElement>('fetch-progress');
+    bar.max = Math.max(1, job.progress.total);
+    bar.value = job.progress.completed;
+    $('fetch-label').textContent = job.progress.message ?? `${job.progress.phase} ${job.progress.completed}/${job.progress.total}`;
+  }
+
+  async #cancelFetch(): Promise<void> {
+    const handle = this.#fetch;
+    if (!handle) return;
+    handle.cancelled = true;
+    $('fetch-label').textContent = 'Cancelling…';
+    await this.#deps.client.cancelCandleJob(handle.id);
   }
 
   /** Reattach to a session that outlived a page reload. It comes back paused at the server's version. */
   async reattach(sessionId: string, name = ''): Promise<'attached' | 'closed' | 'missing'> {
     if (this.#creating) return 'missing';
     const generation = ++this.#generation;
+    this.#stopLive();
     this.#creating = true;
     this.#render();
     try {
@@ -254,6 +331,7 @@ export class SessionView {
     if (!current || this.#creating) return;
     ++this.#generation;
     this.#stopPlay();
+    this.#stopLive();
     this.#busy = false;
     this.#syncing = false;
     this.#session = null;
@@ -336,6 +414,11 @@ export class SessionView {
       this.#notice(`Session completed: ${error.message}`, true);
       return;
     }
+    if (error.code === 'live_unavailable') {
+      this.#log(`${this.#stamp(session)} Live quotes unavailable: ${error.message}`);
+      this.#notice(`Live quotes unavailable: ${error.message}. The session was not changed.`, true);
+      return;
+    }
     if (error.code === 'order_rejected') {
       this.#log(`${this.#stamp(session)} Order rejected: ${error.message}`);
       this.#notice(`Order rejected: ${error.message}`, true);
@@ -366,28 +449,33 @@ export class SessionView {
     return lines;
   }
 
+  #applyStep(step: SessionStep, label: string): void {
+    const before = this.#session!;
+    this.#adopt(step.state);
+    this.#appendEvents(before, step);
+    const now = this.#session!;
+    for (const line of this.#describe(step.events).reverse()) this.#log(line);
+    const frames = `${step.framesIngested} frame${step.framesIngested === 1 ? '' : 's'}`;
+    this.#log(`${this.#stamp(now)} ${label}: ${frames} ingested`);
+    if (label === 'Play') return;
+    this.#notice(now.status === 'completed'
+      ? (now.kind === 'live' ? 'The live session reached its configured duration. Positions were closed with modeled exit costs.' : 'Replay complete at the exact final close. Positions were closed with modeled exit costs.')
+      : `${label}: ${frames} ingested, now at ${utc(now.currentFrame.time)}.`);
+  }
+
   async #advance(advance: Advance, label: string): Promise<boolean> {
     if (!this.#canStep()) return false;
-    return this.#act(
-      session => this.#deps.client.advance(session.id, advance, session.version),
-      step => {
-        const before = this.#session!;
-        this.#adopt(step.state);
-        this.#appendEvents(before, step);
-        const now = this.#session!;
-        for (const line of this.#describe(step.events).reverse()) this.#log(line);
-        const frames = `${step.framesIngested} frame${step.framesIngested === 1 ? '' : 's'}`;
-        this.#log(`${this.#stamp(now)} ${label}: ${frames} ingested`);
-        if (label !== 'Play') {
-          this.#notice(now.status === 'completed'
-            ? 'Replay complete at the exact final close. Positions were closed with modeled exit costs.'
-            : `${label}: ${frames} ingested, now at ${utc(now.currentFrame.time)}.`);
-        }
-      });
+    return this.#act(session => this.#deps.client.advance(session.id, advance, session.version), step => this.#applyStep(step, label));
+  }
+
+  /** Live sessions: the server fetches fresh public quotes and ingests them. 502 leaves the session unchanged. */
+  async #tick(label: string): Promise<boolean> {
+    if (!this.#canTick()) return false;
+    return this.#act(session => this.#deps.client.tickSession(session.id, session.version), step => this.#applyStep(step, label));
   }
 
   async #order(order: Order): Promise<boolean> {
-    if (!this.#canStep()) return false;
+    if (!this.#canOrder()) return false;
     return this.#act(
       session => this.#deps.client.placeOrder(session.id, order, session.version),
       step => {
@@ -400,6 +488,7 @@ export class SessionView {
   }
 
   async togglePlay(): Promise<void> {
+    if (this.#session?.kind === 'live') { this.#toggleLive(); return; }
     if (this.#playing) {
       this.#stopPlay();
       this.#pauseRequested = true; // the loop announces the pause once its in-flight tick has landed
@@ -436,9 +525,73 @@ export class SessionView {
     this.#paint();
   }
 
+  // ---- live ticking: only while the page is visible, never overlapping, paused when hidden ---------------
+  #visible(): boolean { return document.visibilityState === 'visible' && !document.hidden; }
+  #canTick(): boolean {
+    const s = this.#session;
+    return !!s && s.kind === 'live' && s.status === 'active' && !this.#working && !this.#deps.workspace.locked && !this.#snapshotOpen;
+  }
+  #startLive(): void {
+    this.#liveRunning = true;
+    this.#scheduleTick();
+    this.#render();
+    this.#paint();
+  }
+  #stopLive(): void {
+    this.#liveRunning = false;
+    if (this.#liveTimer !== null) clearTimeout(this.#liveTimer);
+    this.#liveTimer = null;
+  }
+  #scheduleTick(): void {
+    if (this.#liveTimer !== null) clearTimeout(this.#liveTimer);
+    this.#liveTimer = null;
+    if (!this.#liveRunning || !this.#visible()) return;
+    const generation = this.#generation;
+    this.#liveTimer = setTimeout(() => {
+      this.#liveTimer = null;
+      if (!this.#liveRunning || generation !== this.#generation) return;
+      void (this.#visible() && this.#canTick() ? this.#tick('Live tick') : Promise.resolve()).finally(() => {
+        if (this.#liveRunning && generation === this.#generation) this.#scheduleTick();
+      });
+    }, this.#deps.liveTickMs);
+  }
+  #toggleLive(): void {
+    if (this.#liveRunning) {
+      this.#stopLive();
+      this.#notice('Live ticking paused. Manual orders still fetch fresh quotes.');
+      this.#render();
+      this.#paint();
+      return;
+    }
+    if (this.#session?.status !== 'active') return;
+    this.#startLive();
+    this.#notice(`Live ticking resumed every ${this.#deps.liveTickMs / 1000} s while this tab is visible.`);
+    void this.#tick('Live tick');
+  }
+  #visibilityChanged(): void {
+    if (!this.#liveRunning) return;
+    if (!this.#visible()) {
+      if (this.#liveTimer !== null) clearTimeout(this.#liveTimer);
+      this.#liveTimer = null;
+      this.#notice('Live ticking is paused while this tab is hidden; observations resume when it is visible again.');
+      this.#render();
+      return;
+    }
+    this.#notice('Tab visible again: live ticking resumed.');
+    void this.#tick('Live tick').finally(() => this.#scheduleTick());
+  }
+
+  refreshLabels(): void { this.#render(); }
+
+  /** Manual orders work in replay and live sessions (a live order fetches its own fresh quote server-side). */
+  #canOrder(): boolean {
+    const s = this.#session;
+    return !!s && s.status === 'active' && !this.#working && !this.#deps.workspace.locked && !this.#snapshotOpen && !this.#playing;
+  }
+
   #canStep(): boolean {
     const s = this.#session;
-    return !!s && s.status === 'active' && !this.#working && !this.#deps.workspace.locked && !this.#snapshotOpen;
+    return !!s && s.kind !== 'live' && s.status === 'active' && !this.#working && !this.#deps.workspace.locked && !this.#snapshotOpen;
   }
 
   async save(): Promise<boolean> {
@@ -488,6 +641,8 @@ export class SessionView {
     root.dataset['sessionId'] = s?.id ?? '';
     root.dataset['runId'] = s?.runId ?? '';
     root.dataset['playing'] = String(this.#playing);
+    root.dataset['kind'] = s?.kind ?? '';
+    root.dataset['live'] = String(this.#liveRunning);
     root.dataset['busy'] = String(this.#working || locked);
     root.dataset['snapshot'] = String(this.#snapshotOpen);
     $('s-state').hidden = !s || this.#snapshotOpen;
@@ -495,19 +650,27 @@ export class SessionView {
     $('s-background').hidden = !s || !this.#snapshotOpen;
     const idle = !!s && s.status === 'active' && !this.#working && !this.#playing && !locked && !this.#snapshotOpen;
     const set = (id: string, enabled: boolean): void => { $<HTMLButtonElement>(id).disabled = !enabled; };
+    const live = s?.kind === 'live';
     set('s-start', !this.#creating && !locked);
-    set('s-next-frame', idle);
-    set('s-next-decision', idle);
-    set('s-finish', idle);
-    set('s-play', !!s && s.status === 'active' && !this.#creating && !locked && !this.#snapshotOpen && (this.#playing || !this.#working));
-    $('s-play').textContent = this.#playing ? 'Pause' : 'Play';
+    set('s-start-live', !this.#creating && !locked);
+    for (const id of ['s-next-frame', 's-next-decision', 's-finish']) $(id).hidden = live;
+    $('s-tick').hidden = !live;
+    set('s-next-frame', idle && !live);
+    set('s-next-decision', idle && !live);
+    set('s-finish', idle && !live);
+    set('s-tick', live && this.#canTick());
+    set('s-play', !!s && s.status === 'active' && !this.#creating && !locked && !this.#snapshotOpen && (live || this.#playing || !this.#working));
+    $('s-play').textContent = live ? (this.#liveRunning ? 'Pause live' : 'Resume live') : this.#playing ? 'Pause' : 'Play';
+    $('s-live-note').hidden = !live;
     const quiet = !!s && !this.#working && !this.#playing && !locked && !this.#snapshotOpen;
     set('s-save', quiet);
     set('s-export', quiet);
     set('s-archive', quiet);
     set('s-close', !!s && !this.#creating && !locked);
     for (const asset of ASSETS) { set(`s-buy-${asset}`, idle); set(`s-sell-${asset}`, idle); }
-    $('s-start').textContent = s ? 'Close and start a new session' : 'Start session';
+    const range = this.#deps.replaySource() === 'range';
+    $('s-start').textContent = s ? (range ? 'Close and fetch a new replay' : 'Close and start a new session') : (range ? 'Fetch & start replay' : 'Start session');
+    $('s-start-live').textContent = s ? 'Close and start a live paper session' : 'Start live paper session';
     if (s) this.#renderState(s);
     $('s-activity').replaceChildren(...this.#activity.map(text => el('li', '', text)));
     if (!this.#working && !this.#playing) {
@@ -521,11 +684,16 @@ export class SessionView {
     const clock = $('s-clock');
     clock.textContent = utc(s.currentFrame.time);
     clock.dataset['time'] = String(s.currentFrame.time);
-    $('s-status').textContent = s.status === 'completed' ? 'Completed' : this.#playing ? 'Playing' : 'Paused';
+    const live = s.kind === 'live';
+    $('s-status').textContent = s.status === 'completed' ? 'Completed' : live ? (this.#liveRunning ? 'Live · ticking' : 'Live · paused') : this.#playing ? 'Playing' : 'Paused';
     const progress = $<HTMLProgressElement>('s-progress');
+    progress.hidden = live;
     progress.max = Math.max(1, s.frameCount - 1);
     progress.value = s.cursor;
-    $('s-cursor').textContent = `Frame ${s.cursor + 1} of ${s.frameCount}`;
+    $('s-cursor').textContent = live ? `${s.frameCount} live observation${s.frameCount === 1 ? '' : 's'}` : `Frame ${s.cursor + 1} of ${s.frameCount}`;
+    $('s-live-note').textContent = live
+      ? `Paper session until ${utc(s.scoreEnd)}. ${this.#liveRunning ? `Fresh public quotes are fetched every ${this.#deps.liveTickMs / 1000} s while this tab is visible.` : 'Ticking is paused; use Tick now or Resume live.'}`
+      : '';
     $('s-cursor').dataset['cursor'] = String(s.cursor);
     $('s-cursor').dataset['frameCount'] = String(s.frameCount);
     const metrics: [string, number, string][] = [

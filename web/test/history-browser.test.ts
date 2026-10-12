@@ -103,7 +103,7 @@ describe('history, snapshots and reload (real Chromium, real API, JS oracle)', (
     await assertMatchesOracle(page, client, oracle, 'live session after snapshots');
   }));
 
-  it('Use settings starts a session that keeps imported timing limits; unsupported settings are refused without side effects', t => scenario(t, async ({page}) => {
+  it('Use settings starts a session that keeps imported timing limits; live-mode settings apply after saving and closing the open session', t => scenario(t, async ({page}) => {
     const settings = await client.normalizeSettings({config: {maxQuoteAgeMs: 45000, maxOutcomeLatenessMs: 12000, horizonMs: 300000, feeBps: 12}});
     const source = await client.createSession({settings, name: 'timing source'});
     const saved = await client.saveSession(source.id, source.version, 'timing source');
@@ -127,18 +127,17 @@ describe('history, snapshots and reload (real Chromium, real API, JS oracle)', (
     assert.equal(record.config.maxOutcomeLatenessMs, 12000);
     assert.equal(record.name, 'timing source · new run');
 
-    // A live-mode run cannot be started by this preview: the session stays exactly as it was.
+    // Settings of a live-mode run apply too: the open session is saved and closed first, then the form shows them.
     await idle(page);
-    const before = await read(page);
+    const open = await read(page);
     await openHistory(page, LIVE.id);
     await card(page, LIVE.id).locator('[data-action=use-settings]').click();
-    await page.waitForFunction(() => document.getElementById('notice')!.textContent!.startsWith('Settings were not applied'));
-    assert.match(await notice(page), /only runs replays/);
-    const after = await read(page);
-    assert.equal(after.id, before.id);
-    assert.equal(after.version, before.version);
-    assert.equal((await client.getSession(before.id)).status, 'active');
-    assert.equal(await page.inputValue('#feeBps'), '12');
+    await page.waitForFunction(() => (document.getElementById('feeBps') as HTMLInputElement).value === '1');
+    assert.equal(await page.inputValue('#liveHours'), '2');
+    assert.equal(await page.locator('#s-start-live').isEnabled(), true);
+    const closed = await client.getSession(open.id);
+    assert.equal(closed.status, 'closed');
+    assert.notEqual(closed.savedVersion, null, 'the open session was saved before it was closed');
   }));
 
   it('Export all runs equals GET /v1/runs/{id} for each run, saving the live session first', t => scenario(t, async ({page, oracle}) => {

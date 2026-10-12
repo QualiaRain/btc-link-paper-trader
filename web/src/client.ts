@@ -25,6 +25,9 @@ export type LedgerEvent = Schemas['LedgerEvent'];
 export type HistoryExport = Schemas['HistoryExport'];
 export type EquityPoint = Schemas['EquityPoint'];
 export type Forecast = Schemas['Forecast'];
+export type CandleJob = Schemas['CandleJob'];
+export type CandleJobCreate = Schemas['CandleJobCreate'];
+export type Receipt = Schemas['Receipt'];
 export type FrameView = Schemas['FrameView'];
 
 /** Body of an advance call; `expectedVersion` is supplied by the caller separately. */
@@ -93,7 +96,13 @@ export class PaperTrailClient {
   /** Import a `paper-trail-run-v2` record exported by the browser app or by this service. */
   importRun(record: object): Promise<RunMetadata> { return this.#call('POST', '/v1/runs/import', record); }
 
+  // ---- Candle jobs: the server fetches public minute closes for a UTC range; a session then names the job ----
+  createCandleJob(request: CandleJobCreate): Promise<CandleJob> { return this.#call('POST', '/v1/candle-jobs', request); }
+  getCandleJob(id: string): Promise<CandleJob> { return this.#call('GET', `/v1/candle-jobs/${encodeURIComponent(id)}`); }
+  cancelCandleJob(id: string): Promise<CandleJob> { return this.#call('POST', `/v1/candle-jobs/${encodeURIComponent(id)}/cancel`); }
+
   // ---- Stepwise sessions: the server reveals frames causally; every change carries expectedVersion ----
+  /** `candleJobId` names a completed candle job for a date-range replay; omit for the sample or a live session. */
   createSession(request: SessionCreate): Promise<SessionState> { return this.#call('POST', '/v1/sessions', request); }
   getSession(id: string): Promise<SessionState> { return this.#call('GET', `/v1/sessions/${encodeURIComponent(id)}`); }
   getSessionAccount(id: string): Promise<SessionAccount> { return this.#call('GET', `/v1/sessions/${encodeURIComponent(id)}/account`); }
@@ -105,6 +114,10 @@ export class PaperTrailClient {
   placeOrder(id: string, order: Order, expectedVersion: number): Promise<SessionStep> {
     const {asset, side, dollars} = order;
     return this.#call('POST', `/v1/sessions/${encodeURIComponent(id)}/orders`, {asset, side, ...(dollars === undefined ? {} : {dollars}), expectedVersion});
+  }
+  /** Live paper session: the server fetches fresh public quotes and ingests them (502 `live_unavailable` leaves the session unchanged). */
+  tickSession(id: string, expectedVersion: number): Promise<SessionStep> {
+    return this.#call('POST', `/v1/sessions/${encodeURIComponent(id)}/tick`, {expectedVersion});
   }
   /** Snapshot into run history under the session's own run id. */
   saveSession(id: string, expectedVersion: number, name?: string | null): Promise<SessionSave> {
