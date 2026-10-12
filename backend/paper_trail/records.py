@@ -1,6 +1,7 @@
 """Run records compatible with history.js `paper-trail-run-v2` and a small run store."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -11,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .canonical import js_copy, sha256_canonical
+from .canonical import canonical_json, js_copy, sha256_canonical
 from .engine import create_account, get_summary, iso
 
 RUN_FORMAT = "paper-trail-run-v2"
@@ -41,7 +42,9 @@ def make_run_record(account: dict, market: dict | None, name: str | None = None,
     if not isinstance(account, dict) or not account.get("config") or not isinstance(account.get("ledger"), list):
         raise ValueError("No account to save")
     snapshot = js_copy(account)
-    packed_market = js_copy(market)
+    # Serialize the (possibly very large) market once: the canonical text is both the copy and the hashed bytes.
+    market_text = canonical_json(market)
+    packed_market = json.loads(market_text)
     stamp = now_iso()
     rid = run_id or str(uuid.uuid4())
     started = snapshot.get("startedAt")
@@ -53,7 +56,7 @@ def make_run_record(account: dict, market: dict | None, name: str | None = None,
         "status": snapshot["status"], "config": config, "summary": get_summary(snapshot), "account": snapshot,
         "market": packed_market,
         "hashes": {"algorithm": HASH_ALGORITHM, "configSha256": sha256_canonical(config),
-                   "marketSha256": sha256_canonical(packed_market)},
+                   "marketSha256": hashlib.sha256(market_text.encode("utf-8")).hexdigest()},
         "manualTradeCount": sum(1 for e in snapshot["ledger"] if e["type"] == "trade" and e["actor"] == "manual"),
     }
     validate_record(record)
@@ -63,10 +66,42 @@ def make_run_record(account: dict, market: dict | None, name: str | None = None,
 def market_for(settings: dict, dataset: dict, upto: float | None = None) -> dict[str, Any]:
     """The `market` evidence stored with a run created from `dataset` (the single place it is built).
 
-    `upto` is the time of the latest frame a stepwise session has revealed. When given, a range dataset's
-    evidence and coverage describe only observations up to that time, so a mid-replay snapshot never carries
-    candles from the future. `None` (a complete replay, or a finished session) includes everything.
+    Sample runs and runs from a server-side candle retrieval (`dataset["_fetch"]`, a `candles.FetchResult`) use the
+    browser's saved-run format (`evidence.packed_browser_market`): the same dataset frames, packed history
+    catalog, last observed frame and cursor as `app.js marketSnapshot()`, so a complete run's `marketSha256`
+    equals the browser's for the same inputs and the record opens in the existing app.
+    Runs from caller-supplied candles have no retrieval receipts to reproduce, so they keep a compact evidence
+    block (prices, coverage, settings).
+
+    `upto` is the time of the latest frame a stepwise session has revealed. When given, nothing later is
+    included: browser-format snapshots keep only frames up to the cursor (the browser keeps them all, but an
+    export of a causal session must not carry the future), and raw candle responses and later prices are dropped.
+    `None` (a complete replay, or a finished session) includes everything.
     """
+    from . import evidence
+
+    fetched = dataset.get("_fetch")
+    if dataset["kind"] == "sample":
+        browser = evidence.browser_sample_dataset(settings["replay"]["halfSpreadBps"], settings["config"]["lookbackIntervals"])
+    elif fetched is not None:
+        browser = fetched.dataset()
+    else:
+        return _compact_market(settings, dataset, upto)
+    frames = browser["frames"]
+    cursor = len(frames) - 1
+    if upto is not None:
+        cursor = max((i for i, f in enumerate(frames) if f["time"] <= upto), default=0)
+    if cursor < len(frames) - 1:
+        browser = {**browser, "frames": frames[:cursor + 1]}
+        if "evidence" in browser:
+            ev, coverage = _causal_evidence({**browser, "frames": frames[:cursor + 1],
+                                             "scoreStart": browser["scoreStart"], "scoreEnd": browser["scoreEnd"]}, upto)
+            browser["evidence"] = {**ev, "rawResponses": []}
+            browser["coverage"] = coverage
+    return evidence.packed_browser_market(dataset["kind"], browser, settings, cursor)
+
+
+def _compact_market(settings: dict, dataset: dict, upto: float | None) -> dict[str, Any]:
     market = {"kind": dataset["kind"], "source": dataset["source"], "scoreStart": dataset["scoreStart"],
               "scoreEnd": dataset["scoreEnd"], "settings": settings,
               "dataset": {k: dataset[k] for k in ("source", "assumptions", "scoreStart", "scoreEnd",

@@ -235,8 +235,6 @@ def test_export_all_runs_is_a_history_v2_file_in_creation_order(client, browser_
     assert client.get(f"/v1/runs/{browser_completed['id']}").status_code == 200  # `export` is not a run id
 
 
-def test_stubbed_milestone_two_features_say_so_instead_of_pretending(client):
-    candle_job = client.post("/v1/candle-jobs", json={"start": "2024-03-09T12:00", "end": "2024-03-09T13:00"})
-    assert candle_job.status_code == 501 and candle_job.json()["error"]["code"] == "not_implemented"
+def test_candle_job_ids_are_refused_until_wired_rather_than_ignored(client):
     ignored = client.post("/v1/replays", json={"settings": {"config": {}}, "candleJobId": "x"})
-    assert ignored.status_code == 501
+    assert ignored.status_code == 501 and ignored.json()["error"]["code"] == "not_implemented"
