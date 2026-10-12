@@ -15,11 +15,12 @@ from . import API_VERSION
 from .canonical import js_copy
 from .errors import ApiProblem
 from .configuration import HORIZONS, normalize_settings
+from .candles_api import build_router as build_candles_router
 from .sessions_api import build_router as build_sessions_router
-from .records import (RunExists, RunOwned, RunStore, make_run_record, market_for, run_metadata,
+from .records import (RunExists, RunOwned, RunStore, make_run_record, market_for, now_iso, run_metadata,
                       verify_imported_record)
 from .replay import run_replay
-from .schemas import (ApiError, Defaults, Health, JsonObject, ReplayRequest, ReplayResult, RunList,
+from .schemas import (ApiError, HistoryExport, Defaults, Health, JsonObject, ReplayRequest, ReplayResult, RunList,
                       RunMetadata, RunRecord, Settings, SettingsInput)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -80,6 +81,8 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
               operation_id="createReplay", tags=["replay"],
               summary="Run a complete replay and save it to run history")
     def create_replay(body: ReplayRequest) -> dict[str, Any]:
+        if body.candleJobId is not None:  # replaced by the candle-job wiring (milestone 2)
+            raise ApiProblem(501, "not_implemented", "candleJobId is not supported yet; supply candles")
         try:
             settings = normalize_settings(_dump(body.settings))
             candles = None
@@ -95,6 +98,15 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
     @app.get("/v1/runs", response_model=RunList, operation_id="listRuns", tags=["history"])
     def list_runs() -> dict[str, Any]:
         return {"runs": runs.list()}
+
+    @app.get("/v1/runs/export", response_model=HistoryExport, response_model_exclude_unset=True,
+             operation_id="exportAllRuns", tags=["export"], summary="Export every saved run (paper-trail-history-v2)")
+    def export_all() -> JSONResponse:
+        return JSONResponse(js_copy({
+            "format": "paper-trail-history-v2", "exportedAt": now_iso(),
+            "notice": "Paper runs held by this service; partial and manually modified runs are labeled. "
+                      "Not a tamper-proof record.",
+            "runs": runs.all()}), headers={"content-disposition": 'attachment; filename="paper-trail-all-runs.json"'})
 
     def _record(run_id: str) -> dict[str, Any]:
         record = runs.get(run_id)
@@ -146,6 +158,7 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
                                                "close the session before importing over it") from None
 
     app.include_router(build_sessions_router(runs))
+    app.include_router(build_candles_router())
 
     root = Path(web_dir) if web_dir else Path(os.environ.get("PAPER_TRAIL_WEB_DIR", REPO_ROOT / "web" / "public"))
     if root.is_dir():

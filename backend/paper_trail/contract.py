@@ -13,8 +13,8 @@ from .records import RunStore
 # Python versions (422 is "Unprocessable Entity" before 3.13 and "Unprocessable Content" from 3.13).
 # Fixed text keeps the committed contract identical on every supported interpreter.
 STATUS_DESCRIPTIONS = {
-    "200": "Successful Response", "201": "Created", "400": "Bad Request", "404": "Not Found",
-    "409": "Conflict", "422": "Unprocessable Entity", "429": "Too Many Requests", "501": "Not Implemented",
+    "200": "Successful Response", "201": "Created", "202": "Accepted", "400": "Bad Request", "404": "Not Found",
+    "409": "Conflict", "422": "Unprocessable Entity", "429": "Too Many Requests", "501": "Not Implemented", "502": "Bad Gateway",
 }
 
 

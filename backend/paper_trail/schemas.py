@@ -89,7 +89,8 @@ class ReplayRequest(Strict):
     settings: SettingsInput
     name: StrictStr | None = Field(None, max_length=100)
     candles: CandleSeries | None = Field(
-        None, description="Required for the range source: completed one-minute closes, warmup included.")
+        None, description="Range source: completed one-minute closes, warmup included (exclusive with `candleJobId`).")
+    candleJobId: StrictStr | None = Field(None, description="Range source: a completed candle job (exclusive with `candles`).")
 
 
 class Position(BaseModel):
@@ -294,7 +295,8 @@ class FrameView(BaseModel):
 class SessionCreate(Strict):
     settings: SettingsInput
     name: StrictStr | None = Field(None, max_length=100)
-    candles: CandleSeries | None = Field(None, description="Required for the range source (as for /v1/replays).")
+    candles: CandleSeries | None = Field(None, description="Range source: supplied candles (exclusive with `candleJobId`).")
+    candleJobId: StrictStr | None = Field(None, description="Range source: a completed candle job (exclusive with `candles`).")
 
 
 class SessionState(BaseModel):
@@ -302,7 +304,7 @@ class SessionState(BaseModel):
     runId: str = Field(description="Stable id of the run this session saves to; owned by this session while it is open.")
     status: Literal["active", "completed", "closed"]
     version: int = Field(description="Increments on every state change; send it back as `expectedVersion`.")
-    kind: Literal["sample", "historical"]
+    kind: Literal["sample", "historical", "live"]
     cursor: int = Field(description="Index of the latest ingested frame in the dataset.")
     frameCount: int
     warmupFrameCount: int
@@ -353,3 +355,54 @@ class SessionAccount(BaseModel):
 class SessionSave(BaseModel):
     run: RunMetadata
     state: SessionState
+
+
+class TickRequest(Strict):
+    expectedVersion: StrictInt
+
+
+# ---- History export (all runs) ------------------------------------------------------------------
+class HistoryExport(BaseModel):
+    """`paper-trail-history-v2`: every saved run, oldest first."""
+    format: Literal["paper-trail-history-v2"]
+    exportedAt: str
+    notice: str
+    runs: list[RunRecord]
+
+
+# ---- Candle jobs: server-side retrieval of completed one-minute closes ----------------------------
+class CandleJobCreate(Strict):
+    start: StrictStr = Field(description="UTC minute `YYYY-MM-DDTHH:MM` (inclusive scored start).")
+    end: StrictStr = Field(description="UTC minute `YYYY-MM-DDTHH:MM`, a completed minute, at most 31 days after start.")
+    lookbackIntervals: StrictInt = Field(7, ge=1, le=240, description="Sizes the causal warmup window like the browser app.")
+    model: Model = "trend"
+
+
+class Receipt(BaseModel):
+    """Evidence of one HTTP request: what was asked, when it arrived and a hash of the raw body."""
+    asset: Asset
+    url: str
+    receivedAt: float
+    httpDate: str | None
+    sha256: str
+    attempts: int
+    rowCount: int
+
+
+class JobProgress(BaseModel):
+    phase: str
+    completed: int
+    total: int
+    asset: Asset | None = None
+    message: str | None = None
+
+
+class CandleJob(BaseModel):
+    id: str
+    status: Literal["running", "completed", "cancelled", "failed"]
+    start: str
+    end: str
+    progress: JobProgress
+    error: str | None = None
+    receipts: list[Receipt]
+    coverage: dict[str, Any] | None = None

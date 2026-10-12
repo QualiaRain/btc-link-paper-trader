@@ -257,6 +257,113 @@
         "title": "Candle",
         "type": "object"
       },
+      "CandleJob": {
+        "properties": {
+          "coverage": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/JobProgress"
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/Receipt"
+            },
+            "title": "Receipts",
+            "type": "array"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "completed",
+              "cancelled",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "start",
+          "end",
+          "progress",
+          "receipts"
+        ],
+        "title": "CandleJob",
+        "type": "object"
+      },
+      "CandleJobCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "description": "UTC minute `YYYY-MM-DDTHH:MM`, a completed minute, at most 31 days after start.",
+            "title": "End",
+            "type": "string"
+          },
+          "lookbackIntervals": {
+            "default": 7,
+            "description": "Sizes the causal warmup window like the browser app.",
+            "maximum": 240.0,
+            "minimum": 1.0,
+            "title": "Lookbackintervals",
+            "type": "integer"
+          },
+          "model": {
+            "default": "trend",
+            "enum": [
+              "trend",
+              "same-price"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "start": {
+            "description": "UTC minute `YYYY-MM-DDTHH:MM` (inclusive scored start).",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "CandleJobCreate",
+        "type": "object"
+      },
       "CandleSeries": {
         "additionalProperties": false,
         "properties": {
@@ -845,6 +952,88 @@
         "title": "Health",
         "type": "object"
       },
+      "HistoryExport": {
+        "description": "`paper-trail-history-v2`: every saved run, oldest first.",
+        "properties": {
+          "exportedAt": {
+            "title": "Exportedat",
+            "type": "string"
+          },
+          "format": {
+            "const": "paper-trail-history-v2",
+            "title": "Format",
+            "type": "string"
+          },
+          "notice": {
+            "title": "Notice",
+            "type": "string"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunRecord"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "format",
+          "exportedAt",
+          "notice",
+          "runs"
+        ],
+        "title": "HistoryExport",
+        "type": "object"
+      },
+      "JobProgress": {
+        "properties": {
+          "asset": {
+            "anyOf": [
+              {
+                "enum": [
+                  "BTC",
+                  "LINK"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset"
+          },
+          "completed": {
+            "title": "Completed",
+            "type": "integer"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "completed",
+          "total"
+        ],
+        "title": "JobProgress",
+        "type": "object"
+      },
       "LedgerEvent": {
         "additionalProperties": true,
         "description": "Ledger entry; fields beyond the common ones depend on `type`.",
@@ -1028,9 +1217,76 @@
         "title": "Quotes",
         "type": "object"
       },
+      "Receipt": {
+        "description": "Evidence of one HTTP request: what was asked, when it arrived and a hash of the raw body.",
+        "properties": {
+          "asset": {
+            "enum": [
+              "BTC",
+              "LINK"
+            ],
+            "title": "Asset",
+            "type": "string"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "httpDate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Httpdate"
+          },
+          "receivedAt": {
+            "title": "Receivedat",
+            "type": "number"
+          },
+          "rowCount": {
+            "title": "Rowcount",
+            "type": "integer"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "url",
+          "receivedAt",
+          "httpDate",
+          "sha256",
+          "attempts",
+          "rowCount"
+        ],
+        "title": "Receipt",
+        "type": "object"
+      },
       "ReplayRequest": {
         "additionalProperties": false,
         "properties": {
+          "candleJobId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Range source: a completed candle job (exclusive with `candles`).",
+            "title": "Candlejobid"
+          },
           "candles": {
             "anyOf": [
               {
@@ -1040,7 +1296,7 @@
                 "type": "null"
               }
             ],
-            "description": "Required for the range source: completed one-minute closes, warmup included."
+            "description": "Range source: completed one-minute closes, warmup included (exclusive with `candleJobId`)."
           },
           "name": {
             "anyOf": [
@@ -1424,6 +1680,18 @@
       "SessionCreate": {
         "additionalProperties": false,
         "properties": {
+          "candleJobId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Range source: a completed candle job (exclusive with `candles`).",
+            "title": "Candlejobid"
+          },
           "candles": {
             "anyOf": [
               {
@@ -1433,7 +1701,7 @@
                 "type": "null"
               }
             ],
-            "description": "Required for the range source (as for /v1/replays)."
+            "description": "Range source: supplied candles (exclusive with `candleJobId`)."
           },
           "name": {
             "anyOf": [
@@ -1497,7 +1765,8 @@
           "kind": {
             "enum": [
               "sample",
-              "historical"
+              "historical",
+              "live"
             ],
             "title": "Kind",
             "type": "string"
@@ -1796,6 +2065,20 @@
         ],
         "title": "Summary",
         "type": "object"
+      },
+      "TickRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedVersion": {
+            "title": "Expectedversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expectedVersion"
+        ],
+        "title": "TickRequest",
+        "type": "object"
       }
     }
   },
@@ -1807,6 +2090,221 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/candle-jobs": {
+      "post": {
+        "operationId": "createCandleJob",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandleJobCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandleJob"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Start retrieving completed one-minute closes for BTC and LINK (public data, no keys)",
+        "tags": [
+          "candles"
+        ]
+      }
+    },
+    "/v1/candle-jobs/{job_id}": {
+      "get": {
+        "operationId": "getCandleJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandleJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Progress, receipts and coverage",
+        "tags": [
+          "candles"
+        ]
+      }
+    },
+    "/v1/candle-jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancelCandleJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandleJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Cancel a running job; no run is created from it",
+        "tags": [
+          "candles"
+        ]
+      }
+    },
     "/v1/defaults": {
       "get": {
         "operationId": "getDefaults",
@@ -1928,6 +2426,27 @@
         "summary": "List Runs",
         "tags": [
           "history"
+        ]
+      }
+    },
+    "/v1/runs/export": {
+      "get": {
+        "operationId": "exportAllRuns",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryExport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Export every saved run (paper-trail-history-v2)",
+        "tags": [
+          "export"
         ]
       }
     },
@@ -2747,6 +3266,98 @@
           }
         },
         "summary": "Snapshot the session into run history (same run id)",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/tick": {
+      "post": {
+        "operationId": "tickSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TickRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStep"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          }
+        },
+        "summary": "Live paper session: fetch fresh public quotes server-side and ingest them",
         "tags": [
           "sessions"
         ]

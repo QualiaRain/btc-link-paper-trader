@@ -273,6 +273,13 @@ class RunStore:
             record = self._runs.get(run_id)
             return deepcopy(record) if record else None
 
+    def all(self) -> list[dict]:
+        """Every saved record, oldest first (the order history exports use)."""
+        with self._lock:
+            records = [deepcopy(r) for r in self._runs.values()]
+        records.sort(key=lambda r: (r.get("createdAt") or "", r["id"]))
+        return records
+
     def list(self) -> list[dict]:
         with self._lock:
             rows = [run_metadata(r) for r in self._runs.values()]

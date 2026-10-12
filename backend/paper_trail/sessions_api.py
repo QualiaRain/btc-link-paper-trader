@@ -9,7 +9,7 @@ from .configuration import normalize_settings
 from .records import RunStore
 from .sessions import SessionService
 from .schemas import (AdvanceRequest, ApiError, CloseRequest, OrderRequest, SaveRequest, SessionAccount,
-                      SessionCreate, SessionSave, SessionState, SessionStep)
+                      SessionCreate, SessionSave, SessionState, SessionStep, TickRequest)
 
 ERRORS = {code: {"model": ApiError} for code in (404, 409, 422, 429)}
 
@@ -21,6 +21,8 @@ def build_router(runs: RunStore) -> APIRouter:
     @router.post("", response_model=SessionState, response_model_exclude_unset=True, status_code=201, responses=ERRORS,
                  operation_id="createSession", summary="Start a stepwise replay session (first frame ingested)")
     def create_session(body: SessionCreate) -> SessionState:
+        if body.candleJobId is not None:  # replaced by the candle-job wiring (milestone 2)
+            raise ApiProblem(501, "not_implemented", "candleJobId is not supported yet; supply candles")
         try:
             candles = None
             if body.candles is not None:
@@ -58,5 +60,11 @@ def build_router(runs: RunStore) -> APIRouter:
                    summary="Close the session and release its run id (saved snapshots remain)")
     def close(session_id: str, body: CloseRequest | None = None) -> SessionState:
         return service.close(session_id, body.expectedVersion if body else None)
+
+    @router.post("/{session_id}/tick", response_model=SessionStep, response_model_exclude_unset=True,
+                 responses={**ERRORS, 502: {"model": ApiError}}, operation_id="tickSession",
+                 summary="Live paper session: fetch fresh public quotes server-side and ingest them")
+    def tick(session_id: str, body: TickRequest) -> SessionStep:
+        raise ApiProblem(501, "not_implemented", "Live sessions are not implemented yet")
 
     return router

@@ -4,6 +4,57 @@
  */
 
 export interface paths {
+    "/v1/candle-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start retrieving completed one-minute closes for BTC and LINK (public data, no keys) */
+        post: operations["createCandleJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/candle-jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Progress, receipts and coverage */
+        get: operations["getCandleJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/candle-jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a running job; no run is created from it */
+        post: operations["cancelCandleJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/defaults": {
         parameters: {
             query?: never;
@@ -64,6 +115,23 @@ export interface paths {
         };
         /** List Runs */
         get: operations["listRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export every saved run (paper-trail-history-v2) */
+        get: operations["exportAllRuns"];
         put?: never;
         post?: never;
         delete?: never;
@@ -246,6 +314,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions/{session_id}/tick": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Live paper session: fetch fresh public quotes server-side and ingest them */
+        post: operations["tickSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/settings/normalize": {
         parameters: {
             query?: never;
@@ -348,6 +433,54 @@ export interface components {
              * @description UTC close of the completed minute, in epoch milliseconds.
              */
             time: number;
+        };
+        /** CandleJob */
+        CandleJob: {
+            /** Coverage */
+            coverage?: {
+                [key: string]: unknown;
+            } | null;
+            /** End */
+            end: string;
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            progress: components["schemas"]["JobProgress"];
+            /** Receipts */
+            receipts: components["schemas"]["Receipt"][];
+            /** Start */
+            start: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "cancelled" | "failed";
+        };
+        /** CandleJobCreate */
+        CandleJobCreate: {
+            /**
+             * End
+             * @description UTC minute `YYYY-MM-DDTHH:MM`, a completed minute, at most 31 days after start.
+             */
+            end: string;
+            /**
+             * Lookbackintervals
+             * @description Sizes the causal warmup window like the browser app.
+             * @default 7
+             */
+            lookbackIntervals: number;
+            /**
+             * Model
+             * @default trend
+             * @enum {string}
+             */
+            model: "trend" | "same-price";
+            /**
+             * Start
+             * @description UTC minute `YYYY-MM-DDTHH:MM` (inclusive scored start).
+             */
+            start: string;
         };
         /** CandleSeries */
         CandleSeries: {
@@ -558,6 +691,36 @@ export interface components {
             status: "ok";
         };
         /**
+         * HistoryExport
+         * @description `paper-trail-history-v2`: every saved run, oldest first.
+         */
+        HistoryExport: {
+            /** Exportedat */
+            exportedAt: string;
+            /**
+             * Format
+             * @constant
+             */
+            format: "paper-trail-history-v2";
+            /** Notice */
+            notice: string;
+            /** Runs */
+            runs: components["schemas"]["RunRecord"][];
+        };
+        /** JobProgress */
+        JobProgress: {
+            /** Asset */
+            asset?: ("BTC" | "LINK") | null;
+            /** Completed */
+            completed: number;
+            /** Message */
+            message?: string | null;
+            /** Phase */
+            phase: string;
+            /** Total */
+            total: number;
+        };
+        /**
          * LedgerEvent
          * @description Ledger entry; fields beyond the common ones depend on `type`.
          */
@@ -630,9 +793,37 @@ export interface components {
             BTC: components["schemas"]["Quote"];
             LINK: components["schemas"]["Quote"];
         };
+        /**
+         * Receipt
+         * @description Evidence of one HTTP request: what was asked, when it arrived and a hash of the raw body.
+         */
+        Receipt: {
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "BTC" | "LINK";
+            /** Attempts */
+            attempts: number;
+            /** Httpdate */
+            httpDate: string | null;
+            /** Receivedat */
+            receivedAt: number;
+            /** Rowcount */
+            rowCount: number;
+            /** Sha256 */
+            sha256: string;
+            /** Url */
+            url: string;
+        };
         /** ReplayRequest */
         ReplayRequest: {
-            /** @description Required for the range source: completed one-minute closes, warmup included. */
+            /**
+             * Candlejobid
+             * @description Range source: a completed candle job (exclusive with `candles`).
+             */
+            candleJobId?: string | null;
+            /** @description Range source: completed one-minute closes, warmup included (exclusive with `candleJobId`). */
             candles?: components["schemas"]["CandleSeries"] | null;
             /** Name */
             name?: string | null;
@@ -760,7 +951,12 @@ export interface components {
         };
         /** SessionCreate */
         SessionCreate: {
-            /** @description Required for the range source (as for /v1/replays). */
+            /**
+             * Candlejobid
+             * @description Range source: a completed candle job (exclusive with `candles`).
+             */
+            candleJobId?: string | null;
+            /** @description Range source: supplied candles (exclusive with `candleJobId`). */
             candles?: components["schemas"]["CandleSeries"] | null;
             /** Name */
             name?: string | null;
@@ -788,7 +984,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "sample" | "historical";
+            kind: "sample" | "historical" | "live";
             /** Manualtradecount */
             manualTradeCount: number;
             /**
@@ -894,6 +1090,11 @@ export interface components {
             /** Valuationisnetliquidation */
             valuationIsNetLiquidation: boolean;
         };
+        /** TickRequest */
+        TickRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -903,6 +1104,182 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    createCandleJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CandleJobCreate"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandleJob"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    getCandleJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandleJob"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    cancelCandleJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandleJob"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
     getDefaults: {
         parameters: {
             query?: never;
@@ -1010,6 +1387,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunList"];
+                };
+            };
+        };
+    };
+    exportAllRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryExport"];
                 };
             };
         };
@@ -1640,6 +2037,77 @@ export interface operations {
             };
             /** @description Too Many Requests */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    tickSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TickRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionStep"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

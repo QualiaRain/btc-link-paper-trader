@@ -219,3 +219,24 @@ def test_service_never_exposes_real_trading_or_credentials(client):
     assert "Manual paper order" in spec["paths"]["/v1/sessions/{session_id}/orders"]["post"]["summary"]
     assert not any(word in p for p in paths for word in ("key", "wallet", "auth", "withdraw", "exchange", "broker"))
     assert json.dumps(spec).count("password") == 0
+
+
+def test_export_all_runs_is_a_history_v2_file_in_creation_order(client, browser_completed, browser_partial):
+    assert client.get("/v1/runs/export").json()["runs"] == []
+    client.post("/v1/runs/import", json=browser_partial)
+    client.post("/v1/runs/import", json=browser_completed)
+    response = client.get("/v1/runs/export")
+    body = response.json()
+    assert response.status_code == 200 and "attachment" in response.headers["content-disposition"]
+    assert body["format"] == "paper-trail-history-v2" and "tamper-proof" in body["notice"]
+    created = [r["createdAt"] for r in body["runs"]]
+    assert created == sorted(created) and {r["id"] for r in body["runs"]} == {browser_completed["id"], browser_partial["id"]}
+    assert all(r["format"] == "paper-trail-run-v2" for r in body["runs"])
+    assert client.get(f"/v1/runs/{browser_completed['id']}").status_code == 200  # `export` is not a run id
+
+
+def test_stubbed_milestone_two_features_say_so_instead_of_pretending(client):
+    candle_job = client.post("/v1/candle-jobs", json={"start": "2024-03-09T12:00", "end": "2024-03-09T13:00"})
+    assert candle_job.status_code == 501 and candle_job.json()["error"]["code"] == "not_implemented"
+    ignored = client.post("/v1/replays", json={"settings": {"config": {}}, "candleJobId": "x"})
+    assert ignored.status_code == 501
