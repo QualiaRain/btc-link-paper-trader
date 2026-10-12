@@ -8,7 +8,7 @@ A browser-local BTC/LINK paper-trading experiment with configurable rules, histo
 
 Use the **Config**, **Run** and **History** views. These are navigation views, not an authentication or administrative security boundary.
 
-In Config, choose starting cash, forecast horizon, trend or same-price rule, lookback intervals, entry buffer, allocation per asset, stop loss, account drawdown and daily loss limits, fees, slippage and live-session duration. Defaults are $1,000 cash, a seven-minute horizon, seven lookback intervals, a ten-basis-point entry buffer, up to 50% per asset, no stop loss, no account limits, two-basis-point fees and two-basis-point slippage per fill, and a three-basis-point assumed replay half-spread. Ten basis points equals 0.10%.
+In Config, choose starting cash, forecast horizon, trend or same-price rule, lookback intervals, entry buffer, allocation per asset, stop loss, account drawdown and daily loss limits, fees, slippage and live-session duration. Defaults are $1,000 cash, a seven-minute horizon, seven lookback intervals, a ten-basis-point entry buffer, up to 50% per asset, no stop loss, no account limits, no idle cash yield, two-basis-point fees and two-basis-point slippage per fill, and a three-basis-point assumed replay half-spread. Ten basis points equals 0.10%.
 
 Cost defaults model the cheapest venue verified for a Massachusetts retail account in October 2026: Binance.US spot, which has charged 0% maker / 0.02% taker for all users with no volume tiers since April 22, 2026 ([announcement](https://blog.binance.us/zero-fee-trading/)). The app buys at the ask and sells at the bid, so it uses the 2 bps taker fee. Binance.US books are thin and the app prices fills from Coinbase quotes, so the default replay half-spread is 3 bps rather than 2 as an allowance; it is an assumption, not a measured Binance.US spread. One full round trip costs about 0.14%.
 
@@ -32,7 +32,7 @@ Two optional account limits sit above the rule and always win. The **max drawdow
 
 Buys use ask plus slippage; sells use bid minus slippage; each pays a fee. All values include hypothetical exit costs. Replay bid/ask is constructed using the configurable **assumed half-spread** on each side of the candle close. It is not archived order-book data. Live spread comes from the public ticker.
 
-The comparison account invests half the initial balance in BTC and half in LINK at the same first quotes and costs, then holds. Cash earns zero. A profitable replay does not establish a reliable edge. Repeatedly tuning settings against observed results can overfit them. This is a simple experimental rule, not a trained or validated trading model.
+The comparison account invests half the initial balance in BTC and half in LINK at the same first quotes and costs, then holds. Idle cash in the paper account earns the configured **idle cash yield**, an annual rate compounded continuously over elapsed time, including unobserved gaps; the default is 0%. The cash comparison line grows at the same rate, and the comparison account holds no cash. A profitable replay does not establish a reliable edge. Repeatedly tuning settings against observed results can overfit them. This is a simple experimental rule, not a trained or validated trading model.
 
 ## Saved history and exports
 

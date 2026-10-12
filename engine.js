@@ -5,8 +5,8 @@ const finite = x => typeof x === 'number' && Number.isFinite(x);
 const defaults = { initialCash: 1000, horizonMs: 420000, feeBps: 2, slippageBps: 2,
   bufferBps: 10, model: 'trend', mode: 'replay', durationMs: 48*3600000, maxQuoteAgeMs: 60000,
   maxOutcomeLatenessMs: 30000, lookbackIntervals: 7, allocationFraction: .5, stopLossBps: 0,
-  maxDrawdownBps: 0, dailyLossBps: 0 };
-const DAY = 86400000;
+  maxDrawdownBps: 0, dailyLossBps: 0, cashYieldBps: 0 };
+const DAY = 86400000, YEAR = 365*DAY;
 
 export function createAccount(config = {}) {
   if (!config || typeof config!=='object' || Array.isArray(config)) throw new Error('Invalid configuration');
@@ -24,6 +24,7 @@ export function createAccount(config = {}) {
   if (!finite(c.allocationFraction)||c.allocationFraction<0||c.allocationFraction>.5) throw new Error('allocationFraction must be between 0 and 0.5');
   for (const key of ['stopLossBps','maxDrawdownBps','dailyLossBps'])
     if (!finite(c[key])||c[key]<0||c[key]>9999) throw new Error(`${key} must be between 0 and 9999`);
+  if (!finite(c.cashYieldBps)||c.cashYieldBps<0||c.cashYieldBps>2000) throw new Error('cashYieldBps must be between 0 and 2000');
   return {config:c,cash:c.initialCash,positions:{BTC:{qty:0,costBasis:0},LINK:{qty:0,costBasis:0}},ledger:[],forecasts:[],equity:[],
     startedAt:null,endsAt:null,lastDecisionAt:null,lastFrameAt:null,lastValidFrameAt:null,status:'ready',
     baseline:{cash:c.initialCash,positions:{BTC:{qty:0,costBasis:0},LINK:{qty:0,costBasis:0}}},sequence:0};
@@ -87,9 +88,21 @@ function start(a,frame) {
   for (const s of ASSETS) fill(a,a.baseline,s,'buy',budget,frame,'benchmark');
 }
 
+// Idle cash earns the configured annual yield, compounded continuously over the
+// elapsed time since the previous valid frame, including unobserved gaps.
+function growth(a,ms) {
+  return Math.exp((a.config.cashYieldBps||0)/10000*ms/YEAR);
+}
+
+function accrue(a,frame) {
+  if (!a.config.cashYieldBps||a.lastValidFrameAt===null||!(frame.time>a.lastValidFrameAt)||!(a.cash>0)) return;
+  const earned=a.cash*(growth(a,frame.time-a.lastValidFrameAt)-1);
+  a.cash+=earned;a.interest=(a.interest??0)+earned;
+}
+
 function mark(a,frame) {
   const point={time:frame.time,at:iso(frame.time),value:liquidation(a,a,frame),
-    buyHoldValue:liquidation(a,a.baseline,frame),cashValue:a.config.initialCash};
+    buyHoldValue:liquidation(a,a.baseline,frame),cashValue:a.config.initialCash*growth(a,frame.time-a.startedAt)};
   if (a.equity.at(-1)?.time===frame.time) a.equity[a.equity.length-1]=point;
   else a.equity.push(point);
 }
@@ -202,6 +215,7 @@ export function ingest(a,frame) {
     settle(a,frame);a.lastFrameAt=frame.time;a.lastValidFrameAt=frame.time;return a;
   }
   start(a,frame);
+  accrue(a,frame);
   if (a.config.mode==='live'&&a.lastValidFrameAt!==null&&frame.time-a.lastValidFrameAt>Math.min(a.config.horizonMs,120000))
     event(a,'gap',frame.time,{actor:'system',gapMs:frame.time-a.lastValidFrameAt,
       reason:'No intervening fills simulated; resumed at observed quotes'});
@@ -260,7 +274,7 @@ export function getSummary(a) {
   const trades=a.ledger.filter(e=>e.type==='trade'&&e.actor!=='benchmark');
   return {status:a.status,equity:last?.value??initial,cash:a.cash,
     returnPct:100*((last?.value??initial)/initial-1),buyHoldEquity:last?.buyHoldValue??initial,
-    buyHoldReturnPct:100*((last?.buyHoldValue??initial)/initial-1),cashBenchmark:initial,
+    buyHoldReturnPct:100*((last?.buyHoldValue??initial)/initial-1),cashBenchmark:last?.cashValue??initial,interestEarned:a.interest??0,
     drawdownPct:dd,maxDrawdownPct:maxDD,fees:trades.reduce((s,t)=>s+t.fee,0),tradeCount:trades.length,
     forecastCount:a.forecasts.length,settledForecasts:done.length,
     pendingForecasts:a.forecasts.filter(f=>f.status==='pending').length,

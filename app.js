@@ -10,7 +10,7 @@ const utc = n => n==null?'—':new Date(n).toISOString().replace('T',' ').replac
 const shortTime = n => new Date(n).toISOString().slice(11,19);
 const esc = x => String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CHECKPOINT = 'paper-trail.current.v2';
-const FORM_IDS = ['initial-cash','horizon','model','lookback','buffer','allocation','stop-loss','max-drawdown','daily-loss','fee','slippage','live-duration','replay-source','range-start','range-end','half-spread'];
+const FORM_IDS = ['initial-cash','horizon','model','lookback','buffer','allocation','stop-loss','max-drawdown','daily-loss','fee','slippage','live-duration','cash-yield','replay-source','range-start','range-end','half-spread'];
 let account=null, dataset=null, frame=null, cursor=0, timer=null, active=false, busy=false, readOnly=false;
 let runId=null, runName='', runSettings=null, runKind=null, storageError=false, generation=0, fetchController=null;
 let saveChain=Promise.resolve(), lastAutoSave=0, cachedSample=null, currentView='run';
@@ -23,14 +23,14 @@ function numeric(id){const value=$(id).value.trim();if(!value)throw new Error('C
 function readSettings(mode='replay'){
   return normalizeSettings({config:{...importedTimingLimits,mode,initialCash:numeric('initial-cash'),horizonMs:numeric('horizon'),model:$('model').value,
     lookbackIntervals:numeric('lookback'),bufferBps:numeric('buffer'),allocationFraction:numeric('allocation')/100,
-    stopLossBps:numeric('stop-loss'),maxDrawdownBps:numeric('max-drawdown'),dailyLossBps:numeric('daily-loss'),feeBps:numeric('fee'),slippageBps:numeric('slippage'),durationMs:numeric('live-duration')*3600000},
+    stopLossBps:numeric('stop-loss'),maxDrawdownBps:numeric('max-drawdown'),dailyLossBps:numeric('daily-loss'),feeBps:numeric('fee'),slippageBps:numeric('slippage'),durationMs:numeric('live-duration')*3600000,cashYieldBps:numeric('cash-yield')*100},
     replay:{source:$('replay-source').value,start:$('range-start').value,end:$('range-end').value,halfSpreadBps:numeric('half-spread')}});
 }
 function applySettings(settings){
   const s=normalizeSettings(settings),c=s.config;
   importedTimingLimits={maxQuoteAgeMs:c.maxQuoteAgeMs,maxOutcomeLatenessMs:c.maxOutcomeLatenessMs};
   for(const [id,key] of [['initial-cash','initialCash'],['horizon','horizonMs'],['model','model'],['lookback','lookbackIntervals'],['buffer','bufferBps'],['stop-loss','stopLossBps'],['max-drawdown','maxDrawdownBps'],['daily-loss','dailyLossBps'],['fee','feeBps'],['slippage','slippageBps']])$(id).value=c[key];
-  $('allocation').value=c.allocationFraction*100;$('live-duration').value=c.durationMs/3600000;
+  $('allocation').value=c.allocationFraction*100;$('live-duration').value=c.durationMs/3600000;$('cash-yield').value=c.cashYieldBps/100;
   $('replay-source').value=s.replay.source;$('range-start').value=s.replay.start;$('range-end').value=s.replay.end;$('half-spread').value=s.replay.halfSpreadBps;
   rangeVisibility();return s;
 }
@@ -163,7 +163,7 @@ function render(){
   if(account){
     $('equity').textContent=money(s.equity);$('pnl').textContent=`${signed(s.equity-account.config.initialCash)} (${s.returnPct.toFixed(2)}%)`;
     $('pnl').className=s.returnPct>=0?'positive':'negative';$('cash').textContent=money(s.cash);$('buyhold').textContent=money(s.buyHoldEquity);
-    $('drawdown').textContent=`${s.maxDrawdownPct.toFixed(2)}%`;$('fees').textContent=money(s.fees);$('cash-legend').textContent=`${money(account.config.initialCash,0)} cash`;
+    $('drawdown').textContent=`${s.maxDrawdownPct.toFixed(2)}%`;$('fees').textContent=money(s.fees);$('cash-legend').textContent=`${money(account.config.initialCash,0)} cash${account.config.cashYieldBps?` at ${account.config.cashYieldBps/100}%/yr`:''}`;
     $('mode-badge').textContent=`${account.config.mode==='live'?'Live paper':runKind==='sample'?'Sample replay':'UTC replay'} · ${readOnly?'read-only snapshot':active?'running':account.status==='completed'?'complete':'paused / partial'}`;
     $('account-label').textContent=runName;$('clock').textContent=utc(frame?.time);
     $('run-detail').textContent=`${s.tradeCount} fills · ${account.config.model} · ${account.config.horizonMs/60000} min horizon · ${utc(account.startedAt)} → ${utc(account.endsAt)}${s.tradingHalted?` · entries halted by ${s.tradingHalted==='max_drawdown'?'drawdown':'daily loss'} limit`:''}`;
@@ -253,7 +253,7 @@ async function refreshHistory(){
       card.append(smallText(`${record.status==='completed'?'Complete':'Partial snapshot'} · ${c.mode} · ${manual?'manual changes · ':''}${s.riskHalts?`${s.riskHalts} risk halt${s.riskHalts===1?'':'s'} · `:''}saved ${utc(record.updatedAt)}`));
       const metrics=document.createElement('div');metrics.className='history-metrics';
       for(const [label,value] of [['Net value',money(s.equity)],['Return',`${s.returnPct.toFixed(2)}%`],['Buy & hold',money(s.buyHoldEquity)],['Drawdown',`${s.maxDrawdownPct.toFixed(2)}%`]]){const item=document.createElement('div');const span=document.createElement('span');span.textContent=label;const strong=document.createElement('strong');strong.textContent=value;item.append(span,strong);metrics.append(item);}card.append(metrics);
-      card.append(smallText(`${money(c.initialCash,0)} cash · ${c.model} · ${c.horizonMs/60000} min horizon · ${c.lookbackIntervals} lookback · ${c.allocationFraction*100}% per asset · buffer ${c.bufferBps} bps · stop ${c.stopLossBps||'off'}${c.stopLossBps?' bps':''} · drawdown limit ${c.maxDrawdownBps||'off'}${c.maxDrawdownBps?' bps':''} · daily loss ${c.dailyLossBps||'off'}${c.dailyLossBps?' bps':''} · fee/slippage ${c.feeBps}/${c.slippageBps} bps`));
+      card.append(smallText(`${money(c.initialCash,0)} cash · ${c.model} · ${c.horizonMs/60000} min horizon · ${c.lookbackIntervals} lookback · ${c.allocationFraction*100}% per asset · buffer ${c.bufferBps} bps · stop ${c.stopLossBps||'off'}${c.stopLossBps?' bps':''} · drawdown limit ${c.maxDrawdownBps||'off'}${c.maxDrawdownBps?' bps':''} · daily loss ${c.dailyLossBps||'off'}${c.dailyLossBps?' bps':''} · cash yield ${(c.cashYieldBps??0)/100}%/yr · fee/slippage ${c.feeBps}/${c.slippageBps} bps`));
       card.append(smallText(`${utc(record.scoreStart??record.summary.valuationAt)} → ${utc(record.scoreEnd)} · ${s.settledForecasts} scored, ${s.expiredForecasts??0} missed · ${record.source??'Source in export'}`));
       const actions=document.createElement('div');actions.className='history-actions';
       actions.append(historyButton('Open snapshot',()=>openSaved(record.id)),historyButton('Use settings',()=>copySavedSettings(record.id)),historyButton('Export run ↓',async()=>{const full=await getRun(record.id);download(exportRun(full),`paper-trail-${record.id}.json`);}),historyButton('Export settings ↓',async()=>{const full=await getRun(record.id);download({...full.market.settings,format:'paper-trail-settings-v2',config:full.config},`paper-trail-${record.id}-settings.json`);}));

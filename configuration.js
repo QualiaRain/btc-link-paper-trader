@@ -2,7 +2,7 @@ import {createAccount} from './engine.js';
 
 export const HORIZONS = [60000, 300000, 420000, 900000, 3600000, 25200000, 86400000];
 export const CONFIG_FIELDS = ['initialCash','horizonMs','model','lookbackIntervals','bufferBps',
-  'allocationFraction','stopLossBps','maxDrawdownBps','dailyLossBps','feeBps','slippageBps','durationMs','maxQuoteAgeMs','maxOutcomeLatenessMs'];
+  'allocationFraction','stopLossBps','maxDrawdownBps','dailyLossBps','cashYieldBps','feeBps','slippageBps','durationMs','maxQuoteAgeMs','maxOutcomeLatenessMs'];
 
 export function utcMinute(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value))
