@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createAccount,ingest,manualTrade,getSummary} from './engine.js';
+import {createAccount as create,ingest,manualTrade,getSummary} from './engine.js';
+// Mechanics below were written for 10 bps fees; the app default is a realistic retail rate.
+const createAccount=(config={})=>create({feeBps:10,...config});
 const T=1700000000000,M=60000,NEXT_UTC_DAY=Date.UTC(2023,10,15);
 // Same fixture shape as engine.test.js: a rising history makes the trend rule buy.
 function frame(time=T,price=100,trend=.001) {

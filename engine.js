@@ -2,7 +2,7 @@
 export const ASSETS = ['BTC', 'LINK'];
 const iso = t => new Date(t).toISOString();
 const finite = x => typeof x === 'number' && Number.isFinite(x);
-const defaults = { initialCash: 1000, horizonMs: 420000, feeBps: 10, slippageBps: 2,
+const defaults = { initialCash: 1000, horizonMs: 420000, feeBps: 60, slippageBps: 2,
   bufferBps: 10, model: 'trend', mode: 'replay', durationMs: 48*3600000, maxQuoteAgeMs: 60000,
   maxOutcomeLatenessMs: 30000, lookbackIntervals: 7, allocationFraction: .5, stopLossBps: 0,
   maxDrawdownBps: 0, dailyLossBps: 0 };

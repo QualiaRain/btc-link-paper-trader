@@ -8,7 +8,9 @@ A browser-local BTC/LINK paper-trading experiment with configurable rules, histo
 
 Use the **Config**, **Run** and **History** views. These are navigation views, not an authentication or administrative security boundary.
 
-In Config, choose starting cash, forecast horizon, trend or same-price rule, lookback intervals, entry buffer, allocation per asset, stop loss, account drawdown and daily loss limits, fees, slippage and live-session duration. Defaults are $1,000 cash, a seven-minute horizon, seven lookback intervals, a ten-basis-point entry buffer, up to 50% per asset, no stop loss, no account limits, ten-basis-point fees and two-basis-point slippage per fill. Ten basis points equals 0.10%.
+In Config, choose starting cash, forecast horizon, trend or same-price rule, lookback intervals, entry buffer, allocation per asset, stop loss, account drawdown and daily loss limits, fees, slippage and live-session duration. Defaults are $1,000 cash, a seven-minute horizon, seven lookback intervals, a ten-basis-point entry buffer, up to 50% per asset, no stop loss, no account limits, sixty-basis-point fees and two-basis-point slippage per fill. Ten basis points equals 0.10%.
+
+The fee default is a realistic retail rate, not a best case: 0.60% per fill matches the entry-tier taker fee that third-party summaries reported for Coinbase Advanced in October 2026, and the app trades against Coinbase quotes. With the default replay spread, one full round trip costs about 1.27% of the position, so the rule needs a forecast move larger than that before it buys. Check your own venue and tier, and change the fee if yours is lower.
 
 Settings freeze when the run starts. To change them, save the current run and start another. Settings JSON can be exported and imported before starting; invalid values and unknown configuration fields are rejected before anything is applied.
 
