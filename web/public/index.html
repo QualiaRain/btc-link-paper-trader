@@ -36,6 +36,45 @@
       </div>
     </form>
   </section>
+  <section class="panel" id="session-panel" data-status="none" aria-labelledby="session-title">
+    <h2 id="session-title">Stepwise session <span class="muted small">(sample, simulated cash)</span></h2>
+    <p class="muted small">Uses the settings above. The server reveals one frame at a time; later frames are never sent. Manual orders and stepping work only while paused.</p>
+    <p id="s-notice" role="status" class="notice">No session yet.</p>
+    <div class="actions"><button type="button" id="s-start" class="primary">Start session</button><button type="button" id="s-close" disabled>Close session</button></div>
+    <p id="s-empty" class="muted">Start a session to step through the included sample one frame or one decision at a time.</p>
+    <div id="s-state" hidden>
+      <dl class="clock">
+        <div><dt>Clock (latest frame)</dt><dd id="s-clock"></dd></div>
+        <div><dt>State</dt><dd id="s-status"></dd></div>
+        <div><dt>Progress</dt><dd><span id="s-cursor"></span><br><progress id="s-progress" value="0" max="1"></progress></dd></div>
+      </dl>
+      <dl>
+        <div><dt>Cash</dt><dd id="s-cash"></dd></div>
+        <div><dt>Net value</dt><dd id="s-equity"></dd></div>
+        <div><dt>Buy &amp; hold</dt><dd id="s-buyhold"></dd></div>
+        <div><dt>Fees paid</dt><dd id="s-fees"></dd></div>
+        <div><dt>Paper trades</dt><dd id="s-trades"></dd></div>
+        <div><dt>Manual trades</dt><dd id="s-manual"></dd></div>
+      </dl>
+      <div class="assets">
+        <div class="asset"><strong>BTC</strong> <span id="s-price-BTC"></span> <span class="muted small">position <span id="s-qty-BTC"></span></span>
+          <div class="actions"><button type="button" id="s-buy-BTC" disabled>Buy $100</button><button type="button" id="s-sell-BTC" disabled>Sell all</button></div></div>
+        <div class="asset"><strong>LINK</strong> <span id="s-price-LINK"></span> <span class="muted small">position <span id="s-qty-LINK"></span></span>
+          <div class="actions"><button type="button" id="s-buy-LINK" disabled>Buy $100</button><button type="button" id="s-sell-LINK" disabled>Sell all</button></div></div>
+      </div>
+      <div class="actions">
+        <button type="button" id="s-next-frame" disabled>Next frame</button>
+        <button type="button" id="s-next-decision" disabled>Next decision</button>
+        <button type="button" id="s-play" disabled>Play</button>
+        <button type="button" id="s-finish" disabled>Finish</button>
+        <button type="button" id="s-save" disabled>Save snapshot</button>
+        <button type="button" id="s-export" disabled>Export run ↓</button>
+      </div>
+      <p class="muted small"><span id="s-saved"></span> · run <code id="s-run-id"></code></p>
+      <h3>Activity <span class="muted small">(newest first)</span></h3>
+      <ol id="s-activity" class="activity" reversed></ol>
+    </div>
+  </section>
   <section class="panel" id="result" hidden>
     <h2>Result <span class="muted" id="result-name"></span></h2>
     <dl id="metrics"></dl>

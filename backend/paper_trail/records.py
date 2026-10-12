@@ -60,6 +60,46 @@ def make_run_record(account: dict, market: dict | None, name: str | None = None,
     return record
 
 
+def market_for(settings: dict, dataset: dict, upto: float | None = None) -> dict[str, Any]:
+    """The `market` evidence stored with a run created from `dataset` (the single place it is built).
+
+    `upto` is the time of the latest frame a stepwise session has revealed. When given, a range dataset's
+    evidence and coverage describe only observations up to that time, so a mid-replay snapshot never carries
+    candles from the future. `None` (a complete replay, or a finished session) includes everything.
+    """
+    market = {"kind": dataset["kind"], "source": dataset["source"], "scoreStart": dataset["scoreStart"],
+              "scoreEnd": dataset["scoreEnd"], "settings": settings,
+              "dataset": {k: dataset[k] for k in ("source", "assumptions", "scoreStart", "scoreEnd",
+                                                 "warmupFrameCount", "periodStart", "periodEnd")
+                          if dataset.get(k) is not None}}
+    if "evidence" in dataset:
+        evidence, coverage = dataset["evidence"], dataset["coverage"]
+        if upto is not None:
+            evidence, coverage = _causal_evidence(dataset, upto)
+        market["dataset"]["evidence"] = evidence
+        market["dataset"]["coverage"] = coverage
+    return market
+
+
+def _causal_evidence(dataset: dict, upto: float) -> tuple[dict, dict]:
+    step = 60000
+    start, end = dataset["scoreStart"], dataset["scoreEnd"]
+    prices = {a: [row for row in rows if row["time"] <= upto] for a, rows in dataset["evidence"]["prices"].items()}
+    evidence = {**dataset["evidence"], "prices": prices,
+                "sharedCount": sum(1 for f in dataset["frames"] if f["time"] <= upto)}
+    through = min(upto, end)
+    coverage: dict[str, Any] = {}
+    for asset, rows in prices.items():
+        seen = {row["time"] for row in rows}
+        expected = max(0, (through - start) // step + 1)
+        missing = sum(1 for t in range(start, through + 1, step) if t not in seen)
+        coverage[asset] = {"expectedCount": expected, "observedCount": expected - missing, "missingCount": missing,
+                           "missingFraction": missing / expected if expected else 0, "startPresent": start in seen,
+                           "endPresent": through == end and end in seen, "observedThrough": through,
+                           "warmupObservedCount": sum(1 for t in seen if t < start)}
+    return evidence, coverage
+
+
 def run_metadata(record: dict) -> dict[str, Any]:
     validate_record(record)
     market = record.get("market") or {}
@@ -139,11 +179,20 @@ class RunExists(Exception):
         self.run_id = run_id
 
 
+class RunOwned(Exception):
+    """The run id belongs to an open replay session; only that session may write it."""
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__(run_id)
+        self.run_id = run_id
+
+
 class RunStore:
     """Run history keyed by stable run id. In-memory unless a directory is given. Thread-safe."""
 
     def __init__(self, directory: str | os.PathLike | None = None) -> None:
         self._runs: dict[str, dict] = {}
+        self._owners: dict[str, str] = {}  # run id -> id of the open session that may write it
         self._lock = threading.Lock()
         self._dir = Path(directory) if directory else None
         if self._dir:
@@ -169,10 +218,33 @@ class RunStore:
             os.replace(temp, target)
         self._runs[saved["id"]] = saved
 
-    def save(self, record: dict) -> dict:
+    def claim(self, owner: str) -> str:
+        """Allocate a fresh run id, unused and unowned, and give `owner` the exclusive right to write it."""
+        with self._lock:
+            run_id = str(uuid.uuid4())
+            while run_id in self._runs or run_id in self._owners:
+                run_id = str(uuid.uuid4())
+            self._owners[run_id] = owner
+            return run_id
+
+    def release(self, run_id: str, owner: str) -> None:
+        """End `owner`'s claim. Snapshots already saved remain."""
+        with self._lock:
+            if self._owners.get(run_id) == owner:
+                del self._owners[run_id]
+
+    def owner_of(self, run_id: str) -> str | None:
+        with self._lock:
+            return self._owners.get(run_id)
+
+    def save(self, record: dict, owner: str | None = None) -> dict:
+        """Insert or replace a run. A run id claimed by an open session is writable only by that session."""
         validate_record(record)
         saved = deepcopy(record)
         with self._lock:
+            held = self._owners.get(saved["id"])
+            if held != owner and (held is not None or owner is not None):
+                raise RunOwned(saved["id"])
             self._write(saved)
         return deepcopy(saved)
 
@@ -186,6 +258,8 @@ class RunStore:
         validate_record(record)
         candidate = deepcopy(record)
         with self._lock:
+            if candidate["id"] in self._owners:  # even replace=true: an open session is still writing it
+                raise RunOwned(candidate["id"])
             existing = self._runs.get(candidate["id"])
             if existing is not None and not replace:
                 if existing == candidate:

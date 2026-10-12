@@ -9,6 +9,7 @@ caller, so no network access, credentials or keys are involved.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -175,3 +176,46 @@ def run_replay(settings: dict[str, Any], candles: dict[str, Any] | None = None,
         if account["status"] == "completed":
             break
     return account, dataset
+
+
+@lru_cache(maxsize=4)
+def _shared_sample_dataset(half_spread_bps: float, lookback: int) -> dict[str, Any]:
+    return sample_dataset(half_spread_bps, lookback)
+
+
+def prepare_replay(settings: dict[str, Any], candles: dict[str, Any] | None = None,
+                   sample_path: Path | str | None = None, share_sample: bool = False
+                   ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The dataset construction and validation of `run_replay`, without running it.
+
+    Returns (config with the scored duration, dataset). With `share_sample` the bundled-sample dataset
+    may be a cached object shared between callers, which must treat its frames as read-only.
+    """
+    config = dict(settings["config"])
+    if config["mode"] != "replay":
+        raise ValueError("Only replay mode is supported by this service")
+    replay = settings["replay"]
+    half = replay["halfSpreadBps"]
+    if replay["source"] == "range":
+        if candles is None:
+            raise ValueError("A date-range replay needs candles for BTC and LINK")
+        dataset = range_dataset(candles, utc_minute(replay["start"]), utc_minute(replay["end"]), half,
+                                config["lookbackIntervals"], config["model"])
+    elif share_sample and sample_path is None:
+        dataset = _shared_sample_dataset(half, config["lookbackIntervals"])
+    else:
+        dataset = sample_dataset(half, config["lookbackIntervals"], sample_path)
+    frames, cursor = dataset["frames"], dataset["cursor"]
+    if not frames or frames[cursor]["time"] != dataset["scoreStart"] or frames[-1]["time"] != dataset["scoreEnd"]:
+        raise ValueError("Historical data is missing an exact scored boundary. No run was created.")
+    config["durationMs"] = dataset["scoreEnd"] - dataset["scoreStart"]
+    if config["durationMs"] < config["horizonMs"]:
+        raise ValueError("The scored date range must be at least one forecast horizon long.")
+    return config, dataset
+
+
+def start_account(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str, Any]:
+    """A new account with the first scored frame ingested (the state a stepwise session starts from)."""
+    account = create_account(config)
+    ingest(account, dataset["frames"][dataset["cursor"]])
+    return account

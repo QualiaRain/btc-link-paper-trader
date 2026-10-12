@@ -14,9 +14,24 @@ export type Account = Schemas['Account'];
 export type Health = Schemas['Health'];
 export type Defaults = Schemas['Defaults'];
 export type CandleSeries = Schemas['CandleSeries'];
+export type SessionCreate = Schemas['SessionCreate'];
+export type SessionState = Schemas['SessionState'];
+export type SessionStep = Schemas['SessionStep'];
+export type SessionAccount = Schemas['SessionAccount'];
+export type SessionSave = Schemas['SessionSave'];
+export type AdvanceRequest = Schemas['AdvanceRequest'];
+export type OrderRequest = Schemas['OrderRequest'];
+export type LedgerEvent = Schemas['LedgerEvent'];
+export type FrameView = Schemas['FrameView'];
+
+/** Body of an advance call; `expectedVersion` is supplied by the caller separately. */
+export type Advance = {mode: 'frames'; count?: number} | {mode: 'decision'} | {mode: 'finish'};
+/** A manual paper order. A sell without `dollars` sells the whole position. */
+export interface Order { asset: OrderRequest['asset']; side: OrderRequest['side']; dollars?: number }
 
 export class ApiError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
+  /** `currentVersion` is set on a 409 `stale_session`: the version the server holds now. */
+  constructor(readonly status: number, readonly code: string, message: string, readonly currentVersion: number | null = null) {
     super(message);
     this.name = 'ApiError';
   }
@@ -38,7 +53,7 @@ export class PaperTrailClient {
     this.#fetch = fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
   }
 
-  async #call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+  async #call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
     let response: Response;
     try {
       response = await this.#fetch(`${this.#base}${path}`, {
@@ -55,7 +70,7 @@ export class PaperTrailClient {
     try { payload = text ? JSON.parse(text) : undefined; } catch { payload = undefined; }
     if (!response.ok) {
       const detail = (payload as Schemas['ApiError'] | undefined)?.error;
-      throw new ApiError(response.status, detail?.code ?? 'http_error', detail?.message ?? `API returned HTTP ${response.status}`);
+      throw new ApiError(response.status, detail?.code ?? 'http_error', detail?.message ?? `API returned HTTP ${response.status}`, detail?.currentVersion ?? null);
     }
     return payload as T;
   }
@@ -72,4 +87,25 @@ export class PaperTrailClient {
   exportSettings(id: string): Promise<Settings> { return this.#call('GET', `/v1/runs/${encodeURIComponent(id)}/settings`); }
   /** Import a `paper-trail-run-v2` record exported by the browser app or by this service. */
   importRun(record: object): Promise<RunMetadata> { return this.#call('POST', '/v1/runs/import', record); }
+
+  // ---- Stepwise sessions: the server reveals frames causally; every change carries expectedVersion ----
+  createSession(request: SessionCreate): Promise<SessionState> { return this.#call('POST', '/v1/sessions', request); }
+  getSession(id: string): Promise<SessionState> { return this.#call('GET', `/v1/sessions/${encodeURIComponent(id)}`); }
+  getSessionAccount(id: string): Promise<SessionAccount> { return this.#call('GET', `/v1/sessions/${encodeURIComponent(id)}/account`); }
+  /** Ingest frames (`frames` with `count`, default 1), up to the next decision, or to the end. */
+  advance(id: string, advance: Advance, expectedVersion: number): Promise<SessionStep> {
+    return this.#call('POST', `/v1/sessions/${encodeURIComponent(id)}/advance`, {...advance, expectedVersion});
+  }
+  /** Manual paper order at the current frame. Rejections are `ApiError` code `order_rejected`. */
+  placeOrder(id: string, order: Order, expectedVersion: number): Promise<SessionStep> {
+    const {asset, side, dollars} = order;
+    return this.#call('POST', `/v1/sessions/${encodeURIComponent(id)}/orders`, {asset, side, ...(dollars === undefined ? {} : {dollars}), expectedVersion});
+  }
+  /** Snapshot into run history under the session's own run id. */
+  saveSession(id: string, expectedVersion: number, name?: string | null): Promise<SessionSave> {
+    return this.#call('POST', `/v1/sessions/${encodeURIComponent(id)}/save`, {expectedVersion, ...(name === undefined ? {} : {name})});
+  }
+  closeSession(id: string, expectedVersion?: number | null): Promise<SessionState> {
+    return this.#call('DELETE', `/v1/sessions/${encodeURIComponent(id)}`, expectedVersion == null ? undefined : {expectedVersion});
+  }
 }

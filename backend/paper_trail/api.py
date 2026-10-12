@@ -16,7 +16,8 @@ from .canonical import js_copy
 from .errors import ApiProblem
 from .configuration import HORIZONS, normalize_settings
 from .sessions_api import build_router as build_sessions_router
-from .records import RunExists, RunStore, make_run_record, run_metadata, verify_imported_record
+from .records import (RunExists, RunOwned, RunStore, make_run_record, market_for, run_metadata,
+                      verify_imported_record)
 from .replay import run_replay
 from .schemas import (ApiError, Defaults, Health, JsonObject, ReplayRequest, ReplayResult, RunList,
                       RunMetadata, RunRecord, Settings, SettingsInput)
@@ -87,14 +88,7 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
             account, dataset = run_replay(settings, candles)
         except ValueError as error:
             raise ApiProblem(422, "replay_rejected", str(error)) from None
-        market = {"kind": dataset["kind"], "source": dataset["source"], "scoreStart": dataset["scoreStart"],
-                  "scoreEnd": dataset["scoreEnd"], "settings": settings,
-                  "dataset": {k: dataset[k] for k in ("source", "assumptions", "scoreStart", "scoreEnd",
-                                                     "warmupFrameCount", "periodStart", "periodEnd")
-                              if dataset.get(k) is not None}}
-        if "evidence" in dataset:
-            market["dataset"]["evidence"] = dataset["evidence"]
-            market["dataset"]["coverage"] = dataset["coverage"]
+        market = market_for(settings, dataset)
         record = runs.save(make_run_record(account, market, name=body.name))
         return {"run": run_metadata(record), "summary": record["summary"], "account": record["account"]}
 
@@ -147,6 +141,9 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
         except RunExists as error:
             raise ApiProblem(409, "run_exists", f"A different run with id {error.run_id} is already saved; "
                                                 "pass replace=true to overwrite it") from None
+        except RunOwned as error:
+            raise ApiProblem(409, "run_owned", f"Run {error.run_id} belongs to an open replay session; "
+                                               "close the session before importing over it") from None
 
     app.include_router(build_sessions_router(runs))
 

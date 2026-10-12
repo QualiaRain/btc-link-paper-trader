@@ -1,4 +1,5 @@
 import {ApiError, PaperTrailClient, type RunMetadata, type RunRecord, type Settings, type SettingsInput} from './client.ts';
+import {SessionView} from './session-view.ts';
 import {EDITABLE_FIELDS, SettingsDraft, assertSupported, percent, type EditableField} from './settings-draft.ts';
 
 const client = new PaperTrailClient({baseUrl: new URLSearchParams(location.search).get('api') ?? ''});
@@ -113,6 +114,7 @@ async function main(): Promise<void> {
       } finally { button.disabled = false; }
     });
   });
+  new SessionView({client, readSettings, runName: () => $<HTMLInputElement>('name').value.trim() || null, download, onSaved: refreshHistory});
   $('export-run').addEventListener('click', () => void guarded(async () => {
     const id = currentRun; // the selection may change while the request is in flight
     if (!id) return;
