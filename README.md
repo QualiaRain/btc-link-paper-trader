@@ -8,7 +8,7 @@ A browser-local BTC/LINK paper-trading experiment with configurable rules, histo
 
 Use the **Config**, **Run** and **History** views. These are navigation views, not an authentication or administrative security boundary.
 
-In Config, choose starting cash, forecast horizon, trend or same-price rule, lookback intervals, entry buffer, allocation per asset, stop loss, fees, slippage and live-session duration. Defaults are $1,000 cash, a seven-minute horizon, seven lookback intervals, a ten-basis-point entry buffer, up to 50% per asset, no stop loss, ten-basis-point fees and two-basis-point slippage per fill. Ten basis points equals 0.10%.
+In Config, choose starting cash, forecast horizon, trend or same-price rule, lookback intervals, entry buffer, allocation per asset, stop loss, account drawdown and daily loss limits, fees, slippage and live-session duration. Defaults are $1,000 cash, a seven-minute horizon, seven lookback intervals, a ten-basis-point entry buffer, up to 50% per asset, no stop loss, no account limits, ten-basis-point fees and two-basis-point slippage per fill. Ten basis points equals 0.10%.
 
 Settings freeze when the run starts. To change them, save the current run and start another. Settings JSON can be exported and imported before starting; invalid values and unknown configuration fields are rejected before anything is applied.
 
@@ -23,6 +23,8 @@ Replay can play slowly, advance to the next decision, or finish in responsive ba
 The trend forecast uses the log-price change over the chosen number of earlier completed observations, scaled by actual elapsed time to the selected horizon and clipped to ±0.03 log return per forecast. Missing minutes are never filled. The same-price rule forecasts the current midpoint.
 
 At each decision, the engine closes existing positions and freezes a new future forecast. It buys only when predicted upside clears spread, both modeled fees, both slippage charges and the entry buffer. Allocation uses the selected fraction of available cash per asset, up to 50%. Accounts are long only, without leverage. The stop loss checks net liquidation value against fee-inclusive position cost at observed frames; zero disables it. A gap can produce a loss larger than the selected threshold. Manual paper trades are labeled and make the result a modified strategy run.
+
+Two optional account limits sit above the rule and always win. The **max drawdown** limit compares net liquidation value with its highest observed value, starting from initial cash; a breach closes positions with modeled exit costs and stops new entries for the rest of the session. The **daily loss** limit compares net liquidation value with the first observed value of the UTC day; a breach closes positions and stops new entries until the next UTC day. Both are checked at observed frames before each decision, so a gap can overshoot them, and zero disables either. While halted, the rule still issues and scores forecasts, and each blocked decision records whether it would have bought. Manual buys are refused during a halt.
 
 Buys use ask plus slippage; sells use bid minus slippage; each pays a fee. All values include hypothetical exit costs. Replay bid/ask is constructed using the configurable **assumed half-spread** on each side of the candle close. It is not archived order-book data. Live spread comes from the public ticker.
 

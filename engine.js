@@ -4,7 +4,9 @@ const iso = t => new Date(t).toISOString();
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const defaults = { initialCash: 1000, horizonMs: 420000, feeBps: 10, slippageBps: 2,
   bufferBps: 10, model: 'trend', mode: 'replay', durationMs: 48*3600000, maxQuoteAgeMs: 60000,
-  maxOutcomeLatenessMs: 30000, lookbackIntervals: 7, allocationFraction: .5, stopLossBps: 0 };
+  maxOutcomeLatenessMs: 30000, lookbackIntervals: 7, allocationFraction: .5, stopLossBps: 0,
+  maxDrawdownBps: 0, dailyLossBps: 0 };
+const DAY = 86400000;
 
 export function createAccount(config = {}) {
   if (!config || typeof config!=='object' || Array.isArray(config)) throw new Error('Invalid configuration');
@@ -20,7 +22,8 @@ export function createAccount(config = {}) {
   for (const [key,max] of Object.entries(maxima)) if (c[key]>max) throw new Error(`${key} exceeds supported maximum`);
   if (!Number.isInteger(c.lookbackIntervals)||c.lookbackIntervals<1||c.lookbackIntervals>240) throw new Error('lookbackIntervals must be an integer from 1 to 240');
   if (!finite(c.allocationFraction)||c.allocationFraction<0||c.allocationFraction>.5) throw new Error('allocationFraction must be between 0 and 0.5');
-  if (!finite(c.stopLossBps)||c.stopLossBps<0||c.stopLossBps>9999) throw new Error('stopLossBps must be between 0 and 9999');
+  for (const key of ['stopLossBps','maxDrawdownBps','dailyLossBps'])
+    if (!finite(c[key])||c[key]<0||c[key]>9999) throw new Error(`${key} must be between 0 and 9999`);
   return {config:c,cash:c.initialCash,positions:{BTC:{qty:0,costBasis:0},LINK:{qty:0,costBasis:0}},ledger:[],forecasts:[],equity:[],
     startedAt:null,endsAt:null,lastDecisionAt:null,lastFrameAt:null,lastValidFrameAt:null,status:'ready',
     baseline:{cash:c.initialCash,positions:{BTC:{qty:0,costBasis:0},LINK:{qty:0,costBasis:0}}},sequence:0};
@@ -154,6 +157,38 @@ function stopPositions(a,frame) {
   return stopped;
 }
 
+// Account-level hard limits, checked at observed frames before decisions. A breach
+// closes positions at modeled exit costs and blocks new entries; forecasts continue.
+// Risk state exists only when a limit is configured.
+function haltReason(a) {
+  return a.risk?.killedAt!=null?'max_drawdown':a.risk?.haltedUntil!=null?'daily_loss':null;
+}
+
+function enforceLimits(a,frame) {
+  const drawdown=a.config.maxDrawdownBps||0,daily=a.config.dailyLossBps||0;
+  if (!drawdown&&!daily) return;
+  const r=a.risk??={peakValue:a.config.initialCash,dayStart:null,dayOpenValue:null,killedAt:null,haltedUntil:null};
+  const value=liquidation(a,a,frame),day=Math.floor(frame.time/DAY)*DAY;
+  if (r.haltedUntil!==null&&frame.time>=r.haltedUntil) {
+    event(a,'risk_resume',frame.time,{actor:'auto',limit:'daily_loss',reason:'New UTC day; daily loss halt lifted'});
+    r.haltedUntil=null;
+  }
+  if (r.dayStart!==day) {r.dayStart=day;r.dayOpenValue=value;}
+  r.peakValue=Math.max(r.peakValue,value);
+  if (r.killedAt!==null||r.haltedUntil!==null) return;
+  let breach=null;
+  if (drawdown&&value<=r.peakValue*(1-drawdown/10000))
+    breach={limit:'max_drawdown',thresholdBps:drawdown,referenceValue:r.peakValue,
+      reason:'Net liquidation value fell from its observed peak by at least the drawdown limit; no new entries for the rest of the session'};
+  else if (daily&&value<=r.dayOpenValue*(1-daily/10000))
+    breach={limit:'daily_loss',thresholdBps:daily,referenceValue:r.dayOpenValue,resumesAt:day+DAY,
+      resumeAt:iso(day+DAY),reason:'Net liquidation value fell from the UTC day opening value by at least the daily loss limit; no new entries until the next UTC day'};
+  if (!breach) return;
+  event(a,'risk_halt',frame.time,{actor:'auto',netLiquidation:value,...breach});
+  close(a,frame,'auto');
+  if (breach.limit==='max_drawdown') r.killedAt=frame.time; else r.haltedUntil=breach.resumesAt;
+}
+
 export function ingest(a,frame) {
   if (!frame||!finite(frame.time)) throw new Error('Invalid frame time');
   if (a.lastFrameAt!==null&&frame.time<=a.lastFrameAt) return a;
@@ -172,6 +207,8 @@ export function ingest(a,frame) {
       reason:'No intervening fills simulated; resumed at observed quotes'});
   settle(a,frame);
   const stopped=stopPositions(a,frame);
+  enforceLimits(a,frame);
+  const blockedBy=haltReason(a);
   if (frame.time>=a.endsAt) {
     close(a,frame,'auto');a.status='completed';event(a,'complete',frame.time,{actor:'system',lateByMs:frame.time-a.endsAt});
   } else if (a.lastDecisionAt===null||frame.time-a.lastDecisionAt>=a.config.horizonMs) {
@@ -192,9 +229,10 @@ export function ingest(a,frame) {
       // retaining spread, both slippage charges and both fees in the hurdle.
       const expectedNetRatio=(pred.prediction/pred.anchor)*(p.sell/p.buy)*(1-p.fee)/(1+p.fee);
       const buy=expectedNetRatio>1+a.config.bufferBps/10000;
-      event(a,'decision',frame.time,{actor:'auto',asset,forecastId:f.id,action:buy?'buy':'cash',
-        expectedNetRatio,requiredNetRatio:1+a.config.bufferBps/10000});
-      if (buy) fill(a,a,asset,'buy',budget,frame,'auto');
+      // A halted decision still records what the rule would have done.
+      event(a,'decision',frame.time,{actor:'auto',asset,forecastId:f.id,action:buy&&!blockedBy?'buy':'cash',
+        expectedNetRatio,requiredNetRatio:1+a.config.bufferBps/10000,...(blockedBy?{blockedBy,wouldBuy:buy}:{})});
+      if (buy&&!blockedBy) fill(a,a,asset,'buy',budget,frame,'auto');
     }
     a.lastDecisionAt=frame.time;
   }
@@ -209,6 +247,7 @@ export function manualTrade(a,asset,side,dollars,frame) {
   if (a.lastFrameAt===null||frame.time>a.lastFrameAt) ingest(a,frame);
   if (frame.time>=a.endsAt) throw new Error('Paper session has ended');
   if (side==='buy'&&a.positions[asset].lastStoppedAt===frame.time) throw new Error('Stopped asset cannot reenter in the same frame');
+  if (side==='buy'&&haltReason(a)) throw new Error(haltReason(a)==='max_drawdown'?'Drawdown limit reached: new entries are stopped for this session':'Daily loss limit reached: new entries resume next UTC day');
   fill(a,a,asset,side,dollars,frame,'manual');mark(a,frame);
   a.lastFrameAt=frame.time;a.lastValidFrameAt=frame.time;return a;
 }
@@ -229,5 +268,6 @@ export function getSummary(a) {
     mae:avg(done,'absoluteError'),samePriceMae:avg(done,'baselineAbsoluteError'),
     perAsset:Object.fromEntries(ASSETS.map(s=>{const fs=done.filter(f=>f.asset===s);return [s,{count:fs.length,
       mae:avg(fs,'absoluteError'),samePriceMae:avg(fs,'baselineAbsoluteError'),qty:a.positions[s].qty}];})),
+    riskHalts:a.ledger.filter(e=>e.type==='risk_halt').length,tradingHalted:haltReason(a),
     valuationAt:last?.time??null,valuationIsNetLiquidation:true};
 }
