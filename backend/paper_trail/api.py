@@ -13,7 +13,9 @@ from fastapi.staticfiles import StaticFiles
 
 from . import API_VERSION
 from .canonical import js_copy
+from .errors import ApiProblem
 from .configuration import HORIZONS, normalize_settings
+from .sessions_api import build_router as build_sessions_router
 from .records import RunExists, RunStore, make_run_record, run_metadata, verify_imported_record
 from .replay import run_replay
 from .schemas import (ApiError, Defaults, Health, JsonObject, ReplayRequest, ReplayResult, RunList,
@@ -21,12 +23,6 @@ from .schemas import (ApiError, Defaults, Health, JsonObject, ReplayRequest, Rep
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ERRORS = {400: {"model": ApiError}, 404: {"model": ApiError}, 422: {"model": ApiError}}
-
-
-class ApiProblem(Exception):
-    def __init__(self, status: int, code: str, message: str) -> None:
-        super().__init__(message)
-        self.status, self.code, self.message = status, code, message
 
 
 def _dump(model: Any) -> dict[str, Any]:
@@ -47,7 +43,8 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
 
     @app.exception_handler(ApiProblem)
     async def problem(_: Request, error: ApiProblem) -> JSONResponse:
-        return JSONResponse({"error": {"code": error.code, "message": error.message}}, status_code=error.status)
+        return JSONResponse({"error": {"code": error.code, "message": error.message, **error.extra}},
+                            status_code=error.status)
 
     @app.exception_handler(RequestValidationError)
     async def invalid(_: Request, error: RequestValidationError) -> JSONResponse:
@@ -150,6 +147,8 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
         except RunExists as error:
             raise ApiProblem(409, "run_exists", f"A different run with id {error.run_id} is already saved; "
                                                 "pass replace=true to overwrite it") from None
+
+    app.include_router(build_sessions_router(runs))
 
     root = Path(web_dir) if web_dir else Path(os.environ.get("PAPER_TRAIL_WEB_DIR", REPO_ROOT / "web" / "public"))
     if root.is_dir():

@@ -143,6 +143,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a stepwise replay session (first frame ingested) */
+        post: operations["createSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Session */
+        get: operations["getSession"];
+        put?: never;
+        post?: never;
+        /** Close the session and release its run id (saved snapshots remain) */
+        delete: operations["closeSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{session_id}/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Full account: ledger, forecasts, equity */
+        get: operations["getSessionAccount"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{session_id}/advance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest the next frame(s), causally */
+        post: operations["advanceSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{session_id}/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manual paper order at the current frame */
+        post: operations["placeOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{session_id}/save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Snapshot the session into run history (same run id) */
+        post: operations["saveSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/settings/normalize": {
         parameters: {
             query?: never;
@@ -195,6 +298,23 @@ export interface components {
              */
             status: "ready" | "running" | "completed";
         };
+        /** AdvanceRequest */
+        AdvanceRequest: {
+            /**
+             * Count
+             * @description Only used by mode `frames`.
+             * @default 1
+             */
+            count: number;
+            /** Expectedversion */
+            expectedVersion: number;
+            /**
+             * Mode
+             * @description `frames`: ingest `count` frames; `decision`: until the next automatic decision is due; `finish`: to the end.
+             * @enum {string}
+             */
+            mode: "frames" | "decision" | "finish";
+        };
         /** ApiError */
         ApiError: {
             error: components["schemas"]["ErrorBody"];
@@ -235,6 +355,11 @@ export interface components {
             BTC: components["schemas"]["Candle"][];
             /** Link */
             LINK: components["schemas"]["Candle"][];
+        };
+        /** CloseRequest */
+        CloseRequest: {
+            /** Expectedversion */
+            expectedVersion?: number | null;
         };
         /**
          * Config
@@ -350,6 +475,11 @@ export interface components {
         ErrorBody: {
             /** Code */
             code: string;
+            /**
+             * Currentversion
+             * @description Set on `stale_session`: the session's current version.
+             */
+            currentVersion?: number | null;
             /** Message */
             message: string;
         };
@@ -390,6 +520,15 @@ export interface components {
             targetAt: number;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * FrameView
+         * @description The latest ingested market frame. Later frames are never exposed.
+         */
+        FrameView: {
+            quotes: components["schemas"]["Quotes"];
+            /** Time */
+            time: number;
         };
         /** Hashes */
         Hashes: {
@@ -434,6 +573,26 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** OrderRequest */
+        OrderRequest: {
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "BTC" | "LINK";
+            /**
+             * Dollars
+             * @description Buy: dollars to spend (required, > 0). Sell: net proceeds wanted; omit to sell the whole position.
+             */
+            dollars?: number | null;
+            /** Expectedversion */
+            expectedVersion: number;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+        };
         /** PerAsset */
         PerAsset: {
             BTC: components["schemas"]["AssetSummary"];
@@ -452,6 +611,24 @@ export interface components {
         Positions: {
             BTC: components["schemas"]["Position"];
             LINK: components["schemas"]["Position"];
+        };
+        /** Quote */
+        Quote: {
+            /** Ask */
+            ask: number;
+            /** Bid */
+            bid: number;
+            /** Mid */
+            mid: number;
+            /** Observedat */
+            observedAt: number;
+            /** Source */
+            source?: string | null;
+        };
+        /** Quotes */
+        Quotes: {
+            BTC: components["schemas"]["Quote"];
+            LINK: components["schemas"]["Quote"];
         };
         /** ReplayRequest */
         ReplayRequest: {
@@ -568,6 +745,95 @@ export interface components {
             updatedAt: string;
         } & {
             [key: string]: unknown;
+        };
+        /** SaveRequest */
+        SaveRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+            /** Name */
+            name?: string | null;
+        };
+        /** SessionAccount */
+        SessionAccount: {
+            account: components["schemas"]["Account"];
+            state: components["schemas"]["SessionState"];
+        };
+        /** SessionCreate */
+        SessionCreate: {
+            /** @description Required for the range source (as for /v1/replays). */
+            candles?: components["schemas"]["CandleSeries"] | null;
+            /** Name */
+            name?: string | null;
+            settings: components["schemas"]["SettingsInput"];
+        };
+        /** SessionSave */
+        SessionSave: {
+            run: components["schemas"]["RunMetadata"];
+            state: components["schemas"]["SessionState"];
+        };
+        /** SessionState */
+        SessionState: {
+            config: components["schemas"]["Config"];
+            currentFrame: components["schemas"]["FrameView"];
+            /**
+             * Cursor
+             * @description Index of the latest ingested frame in the dataset.
+             */
+            cursor: number;
+            /** Framecount */
+            frameCount: number;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "sample" | "historical";
+            /** Manualtradecount */
+            manualTradeCount: number;
+            /**
+             * Nextdecisionat
+             * @description When the next automatic decision is due (null once completed).
+             */
+            nextDecisionAt: number | null;
+            /**
+             * Runid
+             * @description Stable id of the run this session saves to; owned by this session while it is open.
+             */
+            runId: string;
+            /**
+             * Savedversion
+             * @description Session version captured by the latest snapshot, null if never saved.
+             */
+            savedVersion: number | null;
+            /** Scoreend */
+            scoreEnd: number;
+            /** Scorestart */
+            scoreStart: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "completed" | "closed";
+            summary: components["schemas"]["Summary"];
+            /**
+             * Version
+             * @description Increments on every state change; send it back as `expectedVersion`.
+             */
+            version: number;
+            /** Warmupframecount */
+            warmupFrameCount: number;
+        };
+        /** SessionStep */
+        SessionStep: {
+            /**
+             * Events
+             * @description Ledger events produced by this call, in order.
+             */
+            events: components["schemas"]["LedgerEvent"][];
+            /** Framesingested */
+            framesIngested: number;
+            state: components["schemas"]["SessionState"];
         };
         /** Settings */
         Settings: {
@@ -950,6 +1216,430 @@ export interface operations {
             };
             /** @description Unprocessable Content */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    createSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionState"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    getSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionState"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    closeSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CloseRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionState"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    getSessionAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionAccount"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    advanceSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdvanceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionStep"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    placeOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionStep"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    saveSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSave"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

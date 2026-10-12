@@ -209,8 +209,13 @@ def test_import_never_replaces_a_python_run_without_consent(client, browser_comp
     assert client.get(f"/v1/runs/{python_run}/export").json() == before
 
 
-def test_service_never_exposes_trading_or_credentials(client):
-    paths = set(client.get("/openapi.json").json()["paths"])
+def test_service_never_exposes_real_trading_or_credentials(client):
+    """The only order endpoint is the simulated one on a paper session; nothing can reach an exchange."""
+    spec = client.get("/openapi.json").json()
+    paths = set(spec["paths"])
     assert all(p.startswith("/v1/") for p in paths)
-    assert not any(word in p for p in paths for word in ("order", "trade", "key", "wallet", "auth"))
-    assert json.dumps(client.get("/openapi.json").json()).count("password") == 0
+    order_paths = {p for p in paths if "order" in p or "trade" in p}
+    assert order_paths == {"/v1/sessions/{session_id}/orders"}
+    assert "Manual paper order" in spec["paths"]["/v1/sessions/{session_id}/orders"]["post"]["summary"]
+    assert not any(word in p for p in paths for word in ("key", "wallet", "auth", "withdraw", "exchange", "broker"))
+    assert json.dumps(spec).count("password") == 0

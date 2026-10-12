@@ -256,6 +256,7 @@ class Defaults(BaseModel):
 class ErrorBody(BaseModel):
     code: str
     message: str
+    currentVersion: int | None = Field(None, description="Set on `stale_session`: the session's current version.")
 
 
 class ApiError(BaseModel):
@@ -263,3 +264,92 @@ class ApiError(BaseModel):
 
 
 JsonObject = Annotated[dict[str, Any], Field(description="A `paper-trail-run-v2` record exported by this service or by the browser app.")]
+
+
+# ---- Stepwise replay sessions (API v1) ---------------------------------------------------------
+# A session holds one replay on the server and reveals it causally: only frames already ingested are
+# ever visible. Every state-changing call carries `expectedVersion`; a mismatch is a 409 `stale_session`
+# and changes nothing. A session owns exactly one run id; only that session can write snapshots to it.
+
+
+class Quote(BaseModel):
+    bid: float
+    ask: float
+    mid: float
+    observedAt: float
+    source: str | None = None
+
+
+class Quotes(BaseModel):
+    BTC: Quote
+    LINK: Quote
+
+
+class FrameView(BaseModel):
+    """The latest ingested market frame. Later frames are never exposed."""
+    time: float
+    quotes: Quotes
+
+
+class SessionCreate(Strict):
+    settings: SettingsInput
+    name: StrictStr | None = Field(None, max_length=100)
+    candles: CandleSeries | None = Field(None, description="Required for the range source (as for /v1/replays).")
+
+
+class SessionState(BaseModel):
+    id: str
+    runId: str = Field(description="Stable id of the run this session saves to; owned by this session while it is open.")
+    status: Literal["active", "completed", "closed"]
+    version: int = Field(description="Increments on every state change; send it back as `expectedVersion`.")
+    kind: Literal["sample", "historical"]
+    cursor: int = Field(description="Index of the latest ingested frame in the dataset.")
+    frameCount: int
+    warmupFrameCount: int
+    scoreStart: float
+    scoreEnd: float
+    currentFrame: FrameView
+    nextDecisionAt: float | None = Field(description="When the next automatic decision is due (null once completed).")
+    config: Config
+    summary: Summary
+    savedVersion: int | None = Field(description="Session version captured by the latest snapshot, null if never saved.")
+    manualTradeCount: int
+
+
+class AdvanceRequest(Strict):
+    mode: Literal["frames", "decision", "finish"] = Field(
+        description="`frames`: ingest `count` frames; `decision`: until the next automatic decision is due; `finish`: to the end.")
+    count: StrictInt = Field(1, ge=1, le=1000, description="Only used by mode `frames`.")
+    expectedVersion: StrictInt
+
+
+class OrderRequest(Strict):
+    asset: Asset
+    side: Literal["buy", "sell"]
+    dollars: Number | None = Field(None, description="Buy: dollars to spend (required, > 0). Sell: net proceeds wanted; omit to sell the whole position.")
+    expectedVersion: StrictInt
+
+
+class SaveRequest(Strict):
+    expectedVersion: StrictInt
+    name: StrictStr | None = Field(None, max_length=100)
+
+
+class CloseRequest(Strict):
+    expectedVersion: StrictInt | None = None
+
+
+class SessionStep(BaseModel):
+    state: SessionState
+    events: list[LedgerEvent] = Field(description="Ledger events produced by this call, in order.")
+    framesIngested: int
+
+
+class SessionAccount(BaseModel):
+    state: SessionState
+    account: Account
+
+
+class SessionSave(BaseModel):
+    run: RunMetadata
+    state: SessionState

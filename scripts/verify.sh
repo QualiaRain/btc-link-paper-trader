@@ -11,7 +11,7 @@ export REQUIRE_BROWSER=1
 echo "== existing JavaScript tests (unchanged app) =="
 npm test
 echo "== JavaScript goldens still match the existing JS =="
-node --test parity/golden.test.mjs
+node --test parity/*.test.mjs parity/*/*.test.mjs
 echo "== Python backend tests (unit, API, parity vs JS goldens, contract drift) =="
 (cd backend && "$PYTHON" -m pytest -q)
 echo "== TypeScript: generated types match the contract, typecheck, build, end-to-end + real-Chromium UI tests against the running API =="
