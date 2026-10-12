@@ -27,7 +27,7 @@ export function normalizeSettings(input) {
   const replay = input.replay ?? input.market?.settings?.replay ?? {};
   const source = replay.source ?? 'sample';
   if (!['sample','range'].includes(source)) throw new Error('Replay source must be sample or range.');
-  const halfSpreadBps = replay.halfSpreadBps ?? 2;
+  const halfSpreadBps = replay.halfSpreadBps ?? 3;
   if (typeof halfSpreadBps !== 'number' || !Number.isFinite(halfSpreadBps) || halfSpreadBps < 0 || halfSpreadBps > 1000)
     throw new Error('Assumed replay half-spread must be between 0 and 1,000 basis points.');
   const start = replay.start ?? '', end = replay.end ?? '';

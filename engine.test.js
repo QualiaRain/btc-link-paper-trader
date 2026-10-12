@@ -126,10 +126,10 @@ test('stop prevents automatic and manual same-frame reentry',()=>{
   const b=createAccount({stopLossBps:0});ingest(b,frame());ingest(b,frame(T+1000,50));assert.ok(b.positions.BTC.qty>0);
 });
 
-test('default fee is a retail taker rate charged on both entry and exit fills',()=>{
+test('default fee is the cheapest verified retail taker rate, charged on both fills',()=>{
   const a=create(),f=frame();ingest(a,f);
-  assert.equal(a.config.feeBps,60);
+  assert.equal(a.config.feeBps,2);
   manualTrade(a,'BTC','buy',1000,f);
-  // Ask+slippage+60 bps fee in, bid-slippage-60 bps fee out (this fixture's half-spread is 10 bps).
-  near(getSummary(a).equity,1000*(99.9*.9998*.994)/(100.1*1.0002*1.006));
+  // Ask+slippage+2 bps fee in, bid-slippage-2 bps fee out (this fixture's half-spread is 10 bps).
+  near(getSummary(a).equity,1000*(99.9*.9998*.9998)/(100.1*1.0002*1.0002));
 });
