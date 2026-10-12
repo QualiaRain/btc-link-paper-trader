@@ -61,6 +61,7 @@ async function pause(message='Paused. No further paper trades are being simulate
 function trimLive(next){for(const asset of ['BTC','LINK'])next.history[asset]=next.history[asset].slice(-(account?.config.lookbackIntervals??runSettings.config.lookbackIntervals)-1);return next;}
 async function start(mode){
   if(busy||account)return;
+  const version=generation;
   setBusy(true);notify(mode==='live'?'Loading fresh Coinbase quotes…':'Loading historical market data…');
   let nextSettings,nextDataset,nextFrame,nextCursor=0,kind;
   try{
@@ -92,11 +93,13 @@ async function start(mode){
       config.durationMs=nextDataset.scoreEnd-nextDataset.scoreStart;
       if(config.durationMs<config.horizonMs)throw new Error('The scored date range must be at least one forecast horizon long.');
     }
+    if(generation!==version||account)return;
     const created=createAccount(config);ingest(created,nextFrame);
     account=created;dataset=nextDataset;frame=nextFrame;cursor=nextCursor;runSettings=nextSettings;runKind=kind;
     runId=crypto.randomUUID();runName=$('run-name').value.trim().slice(0,100)||`${kind==='live'?'Live':kind==='sample'?'Sample':'UTC replay'} · ${utc(account.startedAt)}`;
     $('run-name').value=runName;readOnly=false;
     try{await persist('new run');}catch{}
+    if(account!==created||generation!==version)return;
     setView('run');render();
     if(!storageError)notify(mode==='live'?'Live paper account started. Fresh quotes update while this tab is visible.':`Replay ready: scored ${utc(dataset.scoreStart)} → ${utc(dataset.scoreEnd)}. Warmup is excluded. Press Play or Finish replay.`);
     if(mode==='live')startLive();
@@ -188,9 +191,15 @@ function render(){
 }
 async function order(asset,side){
   if(busy||active||!account||readOnly)return;
+  const owner=account,version=generation;
   setBusy(true);
   try{
-    if(account.config.mode==='live'){frame=trimLive(await fetchLiveMarket(account.config.horizonMs));dataset.frames.push(frame);ingest(account,frame);}
+    if(owner.config.mode==='live'){
+      const next=await fetchLiveMarket(owner.config.horizonMs);
+      if(account!==owner||generation!==version||readOnly)return;
+      frame=trimLive(next);dataset.frames.push(frame);ingest(account,frame);
+    }
+    if(account!==owner||generation!==version||readOnly)return;
     manualTrade(account,asset,side,side==='buy'?100:Number.MAX_VALUE,frame);
     await persist('manual order snapshot');notify(`Manual paper ${side} recorded. This run now includes manual changes.`);
   }catch(error){notify(error.message,true);}finally{setBusy(false);}
@@ -209,12 +218,16 @@ async function exportCurrent(){
     download(record,filename());if(!storageError)notify('Run exported with frozen settings, full results, source evidence and hashes.');
   }catch(error){notify(`Could not prepare export: ${error.message}. Your current run remains open.`,true);}finally{setBusy(false);}
 }
-async function archive(){
-  if(!account)return;pauseClock();render();
-  if(!readOnly){try{await persist('run before starting another');}catch{return;}}
-  try{localStorage.removeItem(CHECKPOINT);}catch{}
-  account=null;dataset=null;frame=null;cursor=0;runId=null;runName='';readOnly=false;runKind=null;storageError=false;
-  $('run-name').value='';setView('config');render();notify('Previous run is available in History. Configure a new run.');await refreshHistory();
+async function archive(options){
+  if(!account||busy&&options?.allowBusy!==true)return;
+  const manageBusy=options?.allowBusy!==true;if(manageBusy)setBusy(true);
+  try{
+    pauseClock();render();
+    if(!readOnly){try{await persist('run before starting another');}catch{return;}}
+    try{localStorage.removeItem(CHECKPOINT);}catch{}
+    account=null;dataset=null;frame=null;cursor=0;runId=null;runName='';readOnly=false;runKind=null;storageError=false;
+    $('run-name').value='';setView('config');render();notify('Previous run is available in History. Configure a new run.');await refreshHistory();
+  }finally{if(manageBusy)setBusy(false);}
 }
 function settingsExport(){
   try{const settings=account?{...runSettings,config:{...account.config}}:readSettings();download(settings,filename('settings'));notify('Settings exported. They can be imported before starting a new run.');}catch(error){notify(error.message,true);}
@@ -259,13 +272,26 @@ function installRecord(record,isReadOnly){
   applySettings(restoredSettings);$('run-name').value=runName;render();
 }
 async function openSaved(id){
-  if(account&&!readOnly){await pause('Current run saved before opening a snapshot.');if(storageError)return;}
-  const record=await getRun(id);pauseClock();installRecord(record,true);rememberCurrent();setView('run');notify('Read-only snapshot opened. Its results will not change. Use History → Use settings for a new run.');
+  if(busy)return;
+  const owner=account;setBusy(true);
+  try{
+    if(account&&!readOnly){await pause('Current run saved before opening a snapshot.');if(storageError)return;}
+    if(account!==owner)return;
+    const version=generation,record=await getRun(id);
+    if(account!==owner||generation!==version)return;
+    pauseClock();installRecord(record,true);rememberCurrent();setView('run');notify('Read-only snapshot opened. Its results will not change. Use History → Use settings for a new run.');
+  }finally{setBusy(false);}
 }
 async function copySavedSettings(id){
-  const record=await getRun(id),settings=normalizeSettings({...record.market.settings,config:record.config});
-  if(account){await archive();if(account)return;}
-  applySettings(settings);$('run-name').value=`${record.name} · new run`.slice(0,100);setView('config');render();notify('Saved settings copied. Starting a new run creates a separate ID and ledger.');
+  if(busy)return;
+  const owner=account,version=generation;setBusy(true);
+  try{
+    const record=await getRun(id);
+    if(account!==owner||generation!==version)return;
+    const settings=normalizeSettings({...record.market.settings,config:record.config});
+    if(account){await archive({allowBusy:true});if(account)return;}
+    applySettings(settings);$('run-name').value=`${record.name} · new run`.slice(0,100);setView('config');render();notify('Saved settings copied. Starting a new run creates a separate ID and ledger.');
+  }finally{setBusy(false);}
 }
 function setView(view){currentView=view;$('run-view').hidden=view!=='run';$('history-view').hidden=view!=='history';$('config-view').hidden=view!=='config';for(const value of ['run','config','history']){const b=$(`view-${value}`);b.classList.toggle('selected',view===value);if(view===value)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');}}
 async function showHistory(){if(active)await pause('Run paused while viewing History.');setView('history');await refreshHistory();}
