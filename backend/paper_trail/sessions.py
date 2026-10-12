@@ -20,14 +20,25 @@ from __future__ import annotations
 import threading
 import uuid
 from copy import deepcopy
-from typing import Any
+from typing import Any, Callable
 
-from .engine import ASSETS, MAX_FLOAT, get_summary, ingest, manual_trade
+from . import live
+from .engine import ASSETS, MAX_FLOAT, create_account, get_summary, ingest, manual_trade
 from .errors import ApiProblem
 from .records import RunOwned, RunStore, make_run_record, market_for, run_metadata
 from .replay import prepare_replay, start_account
 
 MAX_SESSIONS = 64
+
+LiveFetch = Callable[[float, int], dict]
+
+
+def default_live_fetch(horizon_ms: float, lookback: int) -> dict:
+    """A fresh live frame, trimmed like app.js `trimLive`. Transport and clock are resolved per call."""
+    try:
+        return live.trim_live(live.fetch_live_market(horizon_ms), lookback)
+    except live.LiveMarketError as error:
+        raise ApiProblem(502, "live_unavailable", str(error)) from None
 
 
 def _stale(current: int) -> ApiProblem:
@@ -37,12 +48,14 @@ def _stale(current: int) -> ApiProblem:
 
 class Session:
     def __init__(self, session_id: str, run_id: str, settings: dict, config: dict, dataset: dict, account: dict,
-                 name: str | None) -> None:
+                 name: str | None, live_fetch: LiveFetch = default_live_fetch) -> None:
         self.id, self.run_id = session_id, run_id
+        self.kind = dataset["kind"]
+        self._live_fetch = live_fetch
         self.lock = threading.Lock()
         self.settings, self.dataset, self.account, self.name = settings, dataset, account, name
         self.frames: list[dict] | None = dataset["frames"]
-        self.cursor = dataset["cursor"]
+        self.cursor = len(self.frames) - 1 if self.kind == "live" else dataset["cursor"]
         self.frame_count = len(self.frames)
         self.version = 1
         self.saved_version: int | None = None
@@ -56,6 +69,8 @@ class Session:
         return self._final_frame if self.frames is None else self.frames[self.cursor]
 
     def _revealed_all(self) -> bool:
+        if self.kind == "live":  # a live session ends only when its configured duration is reached
+            return self.account["status"] == "completed"
         return self.account["status"] == "completed" or self.cursor >= self.frame_count - 1
 
     def state(self) -> dict[str, Any]:
@@ -65,12 +80,17 @@ class Session:
                   for a in ASSETS}
         completed = account["status"] == "completed"
         last = account["lastDecisionAt"]
+        if self.kind == "live":
+            start = frame["time"] if account["startedAt"] is None else account["startedAt"]
+            end = frame["time"] + account["config"]["durationMs"] if account["endsAt"] is None else account["endsAt"]
+        else:
+            start, end = self.dataset["scoreStart"], self.dataset["scoreEnd"]
         return {
             "id": self.id, "runId": self.run_id,
             "status": "closed" if self.closed else "completed" if self._revealed_all() else "active",
-            "version": self.version, "kind": self.dataset["kind"], "cursor": self.cursor,
+            "version": self.version, "kind": self.kind, "cursor": self.cursor,
             "frameCount": self.frame_count, "warmupFrameCount": self.dataset["warmupFrameCount"],
-            "scoreStart": self.dataset["scoreStart"], "scoreEnd": self.dataset["scoreEnd"],
+            "scoreStart": start, "scoreEnd": end,
             "currentFrame": {"time": frame["time"], "quotes": quotes},
             "nextDecisionAt": None if completed else (frame["time"] if last is None else last) + self._horizon,
             "config": dict(account["config"]), "summary": get_summary(account),
@@ -78,13 +98,16 @@ class Session:
             "manualTradeCount": sum(1 for e in account["ledger"] if e["type"] == "trade" and e["actor"] == "manual"),
         }
 
-    def _check(self, expected: int | None, *, live: bool = True) -> None:
+    def _check(self, expected: int | None, *, live: bool = True, kind: str | None = None) -> None:
+        """`live` means the call needs a session that is not finished; `kind` restricts it to replay or live sessions."""
         if self.closed:
             raise ApiProblem(409, "session_closed", "The session is closed")
+        if kind is not None and (self.kind == "live") != (kind == "live"):
+            raise ApiProblem(409, "wrong_session_kind", "Use /tick on live sessions and /advance on replay sessions")
         if expected is not None and expected != self.version:
             raise _stale(self.version)
         if live and self._revealed_all():
-            raise ApiProblem(409, "session_completed", "The replay is complete; nothing further can be ingested or traded")
+            raise ApiProblem(409, "session_completed", "The session is complete; nothing further can be ingested or traded")
 
     # ---- operations ----------------------------------------------------------------------------
     def read(self) -> dict[str, Any]:
@@ -97,7 +120,7 @@ class Session:
 
     def advance(self, expected: int, mode: str, count: int) -> dict[str, Any]:
         with self.lock:
-            self._check(expected)
+            self._check(expected, kind="replay")
             work = deepcopy(self.account)
             before = len(work["ledger"])
             frames, cursor, ingested = self.frames, self.cursor, 0
@@ -120,33 +143,70 @@ class Session:
             self.version += 1
             return {"state": self.state(), "events": deepcopy(work["ledger"][before:]), "framesIngested": ingested}
 
-    def order(self, expected: int, asset: str, side: str, dollars: float | None) -> dict[str, Any]:
+    def _fresh_frame(self, expected: int) -> dict:
+        """Live sessions: fetch a new frame without holding the lock (network I/O), after a cheap precheck."""
         with self.lock:
-            self._check(expected)
-            if side == "buy" and (dollars is None or not dollars > 0):
-                raise ApiProblem(422, "order_rejected", "A buy needs dollars greater than zero")
+            self._check(expected, kind="live")
+            config = self.account["config"]
+        return self._live_fetch(config["horizonMs"], config["lookbackIntervals"])
+
+    def tick(self, expected: int) -> dict[str, Any]:
+        frame = self._fresh_frame(expected)
+        with self.lock:
+            self._check(expected, kind="live")  # the session may have changed while the quotes were fetched
             work = deepcopy(self.account)
             before = len(work["ledger"])
             try:
+                ingest(work, frame)
+            except ValueError as error:
+                raise ApiProblem(422, "replay_rejected", str(error)) from None
+            self._adopt(work, frame)
+            return {"state": self.state(), "events": deepcopy(work["ledger"][before:]), "framesIngested": 1}
+
+    def _adopt(self, work: dict, frame: dict) -> None:
+        self.account = work
+        self.frames.append(frame)
+        self.cursor, self.frame_count = len(self.frames) - 1, len(self.frames)
+        self.version += 1
+
+    def order(self, expected: int, asset: str, side: str, dollars: float | None) -> dict[str, Any]:
+        if side == "buy" and (dollars is None or not dollars > 0):
+            with self.lock:
+                self._check(expected)
+            raise ApiProblem(422, "order_rejected", "A buy needs dollars greater than zero")
+        fresh = self._fresh_frame(expected) if self.kind == "live" else None
+        with self.lock:
+            self._check(expected)
+            work = deepcopy(self.account)
+            before = len(work["ledger"])
+            try:
+                if fresh is not None:  # app.js order(): a live order first ingests a fresh quote, then trades at it
+                    ingest(work, fresh)
                 manual_trade(work, asset, side, dollars if side == "buy" or dollars is not None else MAX_FLOAT,
-                             self.frames[self.cursor])
+                             fresh if fresh is not None else self.frames[self.cursor])
             except ValueError as error:
                 raise ApiProblem(422, "order_rejected", str(error)) from None
             events = work["ledger"][before:]
             if not any(e["type"] == "trade" for e in events):
                 raise ApiProblem(422, "order_rejected", "The order produced no trade: "
                                  + ("no cash available" if side == "buy" else "no position to sell"))
-            self.account = work
-            self.version += 1
-            return {"state": self.state(), "events": deepcopy(events), "framesIngested": 0}
+            if fresh is not None:
+                self._adopt(work, fresh)
+            else:
+                self.account = work
+                self.version += 1
+            return {"state": self.state(), "events": deepcopy(events), "framesIngested": 0 if fresh is None else 1}
 
     def save(self, runs: RunStore, expected: int, name: str | None) -> dict[str, Any]:
         with self.lock:
             self._check(expected, live=False)
             label = name if name is not None else self.name
-            frame_time = None if self._revealed_all() else self.frames[self.cursor]["time"]
-            record = make_run_record(self.account, market_for(self.settings, self.dataset, upto=frame_time),
-                                     name=label, run_id=self.run_id)
+            if self.kind == "live":
+                market = live.market_snapshot(self.settings, self.dataset, self.account)
+            else:
+                frame_time = None if self._revealed_all() else self.frames[self.cursor]["time"]
+                market = market_for(self.settings, self.dataset, upto=frame_time)
+            record = make_run_record(self.account, market, name=label, run_id=self.run_id)
             try:
                 stored = runs.save(record, owner=self.id)
             except RunOwned as error:
@@ -167,8 +227,8 @@ class Session:
 
 
 class SessionService:
-    def __init__(self, runs: RunStore, max_sessions: int = MAX_SESSIONS) -> None:
-        self.runs, self.max_sessions = runs, max_sessions
+    def __init__(self, runs: RunStore, max_sessions: int = MAX_SESSIONS, live_fetch: LiveFetch = default_live_fetch) -> None:
+        self.runs, self.max_sessions, self.live_fetch = runs, max_sessions, live_fetch
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
         self._closed_counter = 0
@@ -190,18 +250,30 @@ class SessionService:
         del self._sessions[min(closed, key=lambda s: s.closed_order).id]
         return False
 
-    def create(self, settings: dict, candles: dict | None, name: str | None) -> dict[str, Any]:
+    def create(self, settings: dict, candles: dict | None, name: str | None, fetched: Any = None) -> dict[str, Any]:
         too_many = ApiProblem(429, "too_many_sessions", f"At most {self.max_sessions} open sessions; close one first")
         with self._lock:
             if len(self._sessions) >= self.max_sessions and all(not s.closed for s in self._sessions.values()):
                 raise too_many
-        config, dataset = prepare_replay(settings, candles, share_sample=True)  # ValueError -> caller
-        account = start_account(config, dataset)
+        if settings["config"]["mode"] == "live":
+            if candles is not None:
+                raise ValueError("Live sessions fetch their own quotes; candles are not accepted")
+            config = dict(settings["config"])
+            frame = self.live_fetch(config["horizonMs"], config["lookbackIntervals"])  # ApiProblem 502 on failure
+            account = create_account(config)
+            ingest(account, frame)
+            dataset = live.live_dataset(frame)
+        else:
+            config, dataset = prepare_replay(settings, candles, share_sample=True)  # ValueError -> caller
+            if fetched is not None:  # retrieval receipts: records.market_for stores browser-format fetched evidence
+                dataset["_fetch"] = fetched
+            account = start_account(config, dataset)
         session_id = str(uuid.uuid4())
         with self._lock:
             if self._make_room():
                 raise too_many
-            session = Session(session_id, self.runs.claim(session_id), settings, config, dataset, account, name)
+            session = Session(session_id, self.runs.claim(session_id), settings, config, dataset, account, name,
+                              self.live_fetch)
             self._sessions[session_id] = session
         return session.read()
 
@@ -216,6 +288,9 @@ class SessionService:
 
     def order(self, session_id: str, expected: int, asset: str, side: str, dollars: float | None) -> dict[str, Any]:
         return self._find(session_id).order(expected, asset, side, dollars)
+
+    def tick(self, session_id: str, expected: int) -> dict[str, Any]:
+        return self._find(session_id).tick(expected)
 
     def save(self, session_id: str, expected: int, name: str | None) -> dict[str, Any]:
         return self._find(session_id).save(self.runs, expected, name)

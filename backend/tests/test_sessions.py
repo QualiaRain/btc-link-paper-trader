@@ -182,7 +182,6 @@ def test_session_saved_after_finish_equals_a_post_replays_run(client):
 
 
 @pytest.mark.parametrize("body", [
-    {"settings": {"config": {"mode": "live"}}},
     {"settings": {"config": {}, "replay": {"source": "range", "start": "2024-03-09T12:00", "end": "2024-03-09T13:00"}}},
     {"settings": {"config": {"horizonMs": 1234}}},
 ])

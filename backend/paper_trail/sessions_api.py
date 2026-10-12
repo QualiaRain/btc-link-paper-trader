@@ -2,8 +2,9 @@
 bodies are implemented by the backend owner (see docs/BACKEND_MIGRATION.md)."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
+from .candle_jobs import CandleJobService, candle_source
 from .errors import ApiProblem
 from .configuration import normalize_settings
 from .records import RunStore
@@ -14,21 +15,20 @@ from .schemas import (AdvanceRequest, ApiError, CloseRequest, OrderRequest, Save
 ERRORS = {code: {"model": ApiError} for code in (404, 409, 422, 429)}
 
 
-def build_router(runs: RunStore) -> APIRouter:
+def build_router(runs: RunStore, jobs: CandleJobService | None = None) -> APIRouter:
+    """`jobs` defaults to the app's `app.state.candle_jobs` (read per request)."""
     router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
     service = SessionService(runs)
 
     @router.post("", response_model=SessionState, response_model_exclude_unset=True, status_code=201, responses=ERRORS,
                  operation_id="createSession", summary="Start a stepwise replay session (first frame ingested)")
-    def create_session(body: SessionCreate) -> SessionState:
-        if body.candleJobId is not None:  # replaced by the candle-job wiring (milestone 2)
-            raise ApiProblem(501, "not_implemented", "candleJobId is not supported yet; supply candles")
+    def create_session(body: SessionCreate, request: Request) -> SessionState:
+        if body.settings.config.mode == "live" and (body.candles is not None or body.candleJobId is not None):
+            raise ApiProblem(422, "replay_rejected", "Live sessions fetch their own quotes; candles are not accepted")
         try:
-            candles = None
-            if body.candles is not None:
-                candles = {a: [c.model_dump() for c in getattr(body.candles, a)] for a in ("BTC", "LINK")}
             settings = normalize_settings(body.settings.model_dump(exclude_none=True))
-            return service.create(settings, candles, body.name)
+            candles, fetched = candle_source(jobs or request.app.state.candle_jobs, body.candles, body.candleJobId, settings)
+            return service.create(settings, candles, body.name, fetched)
         except ValueError as error:
             raise ApiProblem(422, "replay_rejected", str(error)) from None
 
@@ -65,6 +65,6 @@ def build_router(runs: RunStore) -> APIRouter:
                  responses={**ERRORS, 502: {"model": ApiError}}, operation_id="tickSession",
                  summary="Live paper session: fetch fresh public quotes server-side and ingest them")
     def tick(session_id: str, body: TickRequest) -> SessionStep:
-        raise ApiProblem(501, "not_implemented", "Live sessions are not implemented yet")
+        return service.tick(session_id, body.expectedVersion)
 
     return router

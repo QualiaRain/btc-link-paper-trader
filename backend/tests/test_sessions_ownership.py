@@ -152,5 +152,5 @@ def _settings():
 
 
 def test_failed_creation_claims_no_run_id(client, store):
-    create(client, {"settings": {"config": {"mode": "live"}}}, status=422)
+    create(client, {"settings": {"config": {"horizonMs": 1234}}}, status=422)
     assert store._owners == {}
