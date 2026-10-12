@@ -1,4 +1,5 @@
 import {ApiError, PaperTrailClient, type RunMetadata, type RunRecord, type Settings, type SettingsInput} from './client.ts';
+import {EDITABLE_FIELDS, SettingsDraft, assertSupported, percent, type EditableField} from './settings-draft.ts';
 
 const client = new PaperTrailClient({baseUrl: new URLSearchParams(location.search).get('api') ?? ''});
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -6,6 +7,7 @@ const money = (n: number): string => n.toLocaleString('en-US', {style: 'currency
 const pct = (n: number): string => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)}%`;
 const FIELDS = ['initialCash', 'lookbackIntervals', 'bufferBps', 'stopLossBps', 'feeBps', 'slippageBps'] as const;
 let currentRun: string | null = null;
+let draft: SettingsDraft;
 
 function notify(text: string, error = false): void {
   $('notice').textContent = text;
@@ -22,30 +24,19 @@ function download(payload: unknown, name: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Validates, then makes `settings` the base of the draft and shows it. Throws before touching anything. */
 function applySettings(settings: Settings): void {
+  assertSupported(settings);
+  draft.replaceBase(settings);
   const c = settings.config;
   for (const key of FIELDS) $<HTMLInputElement>(key).value = String(c[key]);
   $<HTMLSelectElement>('horizonMs').value = String(c.horizonMs);
   $<HTMLSelectElement>('model').value = c.model;
-  $<HTMLInputElement>('allocation').value = String(c.allocationFraction * 100);
+  $<HTMLInputElement>('allocation').value = percent(c.allocationFraction);
   $<HTMLInputElement>('halfSpreadBps').value = String(settings.replay.halfSpreadBps);
 }
 
-function readSettings(): SettingsInput {
-  const num = (id: string): number => {
-    const raw = $<HTMLInputElement>(id).value.trim();
-    if (!raw || !Number.isFinite(Number(raw))) throw new Error('Complete every numeric field with a finite number.');
-    return Number(raw);
-  };
-  return {
-    config: {
-      initialCash: num('initialCash'), horizonMs: num('horizonMs'), model: $<HTMLSelectElement>('model').value as 'trend' | 'same-price',
-      lookbackIntervals: num('lookbackIntervals'), bufferBps: num('bufferBps'), allocationFraction: num('allocation') / 100,
-      stopLossBps: num('stopLossBps'), feeBps: num('feeBps'), slippageBps: num('slippageBps'),
-    },
-    replay: {source: 'sample', halfSpreadBps: num('halfSpreadBps')},
-  };
-}
+const readSettings = (): SettingsInput => draft.request(field => $<HTMLInputElement | HTMLSelectElement>(field).value);
 
 function showResult(run: RunMetadata): void {
   currentRun = run.id;
@@ -98,7 +89,13 @@ async function main(): Promise<void> {
     option.textContent = ms >= 3600000 ? `${ms / 3600000} h` : `${ms / 60000} min`;
     return option;
   }));
+  draft = new SettingsDraft(defaults.settings);
   applySettings(defaults.settings);
+  for (const field of EDITABLE_FIELDS) {
+    const mark = (): void => draft.markEdited(field as EditableField);
+    $(field).addEventListener('input', mark);
+    $(field).addEventListener('change', mark);
+  }
   notify(`Connected to Python API v${health.apiVersion}. Defaults: ${money(defaults.settings.config.initialCash)} simulated cash.`);
   await refreshHistory();
 
@@ -129,15 +126,18 @@ async function main(): Promise<void> {
     download(await client.exportSettings(id), `paper-trail-${id}-settings.json`);
     notify('Settings exported. Import them before starting another run.');
   }));
-  $<HTMLInputElement>('settings-file').addEventListener('change', event => void guarded(async () => {
+  $<HTMLInputElement>('settings-file').addEventListener('change', event => void (async () => {
     const input = event.target as HTMLInputElement, file = input.files?.[0];
     if (!file) return;
     try {
       if (file.size > 1_000_000) throw new Error('Settings file is too large. Import a settings JSON file under 1 MB.');
-      applySettings(await client.normalizeSettings(JSON.parse(await file.text()) as SettingsInput));
+      const normalized = await client.normalizeSettings(JSON.parse(await file.text()) as SettingsInput);
+      applySettings(normalized); // rejects unsupported settings before anything changes
       notify('Settings validated by the API and applied. No run has started.');
+    } catch (error) {
+      notify(`Settings were not applied: ${error instanceof Error ? error.message : String(error)}`, true);
     } finally { input.value = ''; }
-  }));
+  })());
   $<HTMLInputElement>('run-file').addEventListener('change', event => void guarded(async () => {
     const input = event.target as HTMLInputElement, file = input.files?.[0];
     if (!file) return;

@@ -31,7 +31,8 @@ cd backend && python -m uvicorn --factory paper_trail.api:create_app --host 127.
 # open http://127.0.0.1:8000/   (interactive API docs: /docs)
 ```
 
-All checks: `scripts/verify.sh` (Node 22+, Python 3.11+).
+All checks: `scripts/verify.sh` (Node 22+, Python 3.11+, a Chromium for the browser tests: `$CHROMIUM_PATH`,
+`/opt/pw-browsers/chromium`, or `npx playwright-core install chromium`; without one those tests skip, and `verify.sh` makes that a failure).
 
 ## API v1
 
@@ -47,7 +48,7 @@ Errors are always `{"error": {"code", "message"}}` (`invalid_request`, `invalid_
 | `GET /v1/runs`, `GET /v1/runs/{id}` | Run history and a saved run |
 | `GET /v1/runs/{id}/export` | **Results export**: the full `paper-trail-run-v2` record (frozen config, ledger, forecasts, equity, summary, evidence, SHA-256 hashes) |
 | `GET /v1/runs/{id}/settings` | **Settings export** (`paper-trail-settings-v2`), importable before a new run |
-| `POST /v1/runs/import` | Import a run exported by the browser app (see below). Never overwrites a different run with the same id unless `?replace=true` |
+| `POST /v1/runs/import` | Import a run exported by the browser app (see below). Never overwrites a different run with the same id unless `?replace=true`; the conflict check and the write are one atomic step in the store, so concurrent imports of the same new id yield exactly one winner (the other gets 409) |
 
 Regenerate after changing the API: `python -m paper_trail.contract` (in `backend/`) then `npm run types` (in `web/`).
 
@@ -92,7 +93,10 @@ Differences to know about:
 ## Preserved behaviours
 
 * **Imported timing settings** (`maxQuoteAgeMs`, `maxOutcomeLatenessMs`) pass through normalize, replay and settings export
-  (`test_imported_timing_limits_survive_settings_round_trips`, settings parity case).
+  (`test_imported_timing_limits_survive_settings_round_trips`, settings parity case) *and through the TypeScript UI*: the UI
+  keeps the normalized imported settings as its base and overlays only fields the user edited, so undisplayed settings and
+  unedited values are never rebuilt from the form (`web/test/browser.test.ts`, real Chromium). Date-range and live-session
+  settings files are rejected with a clear message before anything is applied, since this slice only replays the sample.
 * **Per-asset causal warmup**: a range replay requires lookback+1 causal observations for *each* asset inside the bounded
   warmup window and refuses the run (no run created) otherwise; warmup never earns returns (parity: `range-replay`).
 * **Snapshot operation ownership**: the browser app's guards are untouched (its tests still run). The Python side has no
@@ -117,5 +121,5 @@ static frontend can be published from Pages and pointed at it, after adding auth
 5. **Frontend parity**: chart, ledger, forecast/position panels, read-only snapshot open, copy settings, archive, current-run
    checkpoint, settings-file import UI; then switch the root app to the TS build behind a flag and retire the JS engine.
 6. **Hardening before any remote hosting**: authentication, CORS allow-list, request-size and rate limits, run quotas, pagination.
-7. **CI**: a workflow running `scripts/verify.sh` (none exists yet), and a committed browser (Playwright) test of the UI.
+7. **CI**: a workflow running `scripts/verify.sh` (none exists yet; it needs Python, Node and a Chromium).
 8. **Hosting decision** for the API (no host, account or paid service was provisioned here).

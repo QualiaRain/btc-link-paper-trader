@@ -131,6 +131,14 @@ def verify_imported_record(record: Any) -> dict[str, Any]:
     return record
 
 
+class RunExists(Exception):
+    """A different run with this id is already saved."""
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__(run_id)
+        self.run_id = run_id
+
+
 class RunStore:
     """Run history keyed by stable run id. In-memory unless a directory is given. Thread-safe."""
 
@@ -149,20 +157,42 @@ class RunStore:
                 except (ValueError, OSError, KeyError, TypeError, AttributeError):
                     continue  # an unreadable file never prevents the service from starting
 
+    def _write(self, saved: dict) -> None:
+        """Insert or replace `saved`. Callers hold `self._lock`."""
+        existing = self._runs.get(saved["id"])
+        if existing:  # saving another snapshot updates the run and keeps its creation time
+            saved["createdAt"] = existing.get("createdAt", saved.get("createdAt"))
+        if self._dir:
+            target = self._dir / f"{saved['id']}.json"
+            temp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+            temp.write_text(json.dumps(saved))
+            os.replace(temp, target)
+        self._runs[saved["id"]] = saved
+
     def save(self, record: dict) -> dict:
         validate_record(record)
         saved = deepcopy(record)
         with self._lock:
-            existing = self._runs.get(saved["id"])
-            if existing:  # saving another snapshot updates the run and keeps its creation time
-                saved["createdAt"] = existing.get("createdAt", saved.get("createdAt"))
-            if self._dir:
-                target = self._dir / f"{saved['id']}.json"
-                temp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
-                temp.write_text(json.dumps(saved))
-                os.replace(temp, target)
-            self._runs[saved["id"]] = saved
+            self._write(saved)
         return deepcopy(saved)
+
+    def save_imported(self, record: dict, replace: bool = False) -> dict:
+        """Store an imported run, deciding conflict and write in ONE critical section.
+
+        Without `replace`, an existing run with the same id is never overwritten: re-importing the
+        identical record is a no-op that returns it, and a different record raises `RunExists`.
+        Concurrent imports of the same absent id therefore yield exactly one winner.
+        """
+        validate_record(record)
+        candidate = deepcopy(record)
+        with self._lock:
+            existing = self._runs.get(candidate["id"])
+            if existing is not None and not replace:
+                if existing == candidate:
+                    return deepcopy(existing)
+                raise RunExists(candidate["id"])
+            self._write(candidate)
+            return deepcopy(candidate)
 
     def get(self, run_id: str) -> dict | None:
         with self._lock:

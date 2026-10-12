@@ -3,55 +3,23 @@
 // beyond loopback. Needs `python3` with backend dependencies (override with $PYTHON).
 import {after, before, describe, it} from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn, type ChildProcess} from 'node:child_process';
-import {createServer} from 'node:net';
-import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {readFileSync} from 'node:fs';
 import {ApiError, PaperTrailClient, type RunRecord} from '../src/client.ts';
+import {repo, startApi, type RunningApi} from './server.ts';
 
-const repo = (path: string): string => fileURLToPath(new URL(`../../../${path}`, import.meta.url));
 const readJson = <T = any>(path: string): T => JSON.parse(readFileSync(repo(path), 'utf8')) as T;
 
-let server: ChildProcess;
+let api: RunningApi;
 let client: PaperTrailClient;
 let baseUrl: string;
-let dataDir: string;
-let log = '';
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const {port} = probe.address() as {port: number};
-      probe.close(() => resolve(port));
-    });
-  });
-}
 
 before(async () => {
-  const port = await freePort();
-  dataDir = mkdtempSync(join(tmpdir(), 'paper-trail-e2e-'));
-  server = spawn(process.env['PYTHON'] ?? 'python3', ['-m', 'uvicorn', '--factory', 'paper_trail.api:create_app', '--host', '127.0.0.1', '--port', String(port)], {
-    cwd: repo('backend'), env: {...process.env, PAPER_TRAIL_DATA_DIR: dataDir, PYTHONDONTWRITEBYTECODE: '1'}, stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  server.stdout?.on('data', chunk => { log += String(chunk); });
-  server.stderr?.on('data', chunk => { log += String(chunk); });
-  baseUrl = `http://127.0.0.1:${port}`;
+  api = await startApi();
+  baseUrl = api.baseUrl;
   client = new PaperTrailClient({baseUrl});
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (server.exitCode !== null) throw new Error(`Python API exited early:\n${log}`);
-    try { await client.health(); return; } catch { await new Promise(r => setTimeout(r, 150)); }
-  }
-  throw new Error(`Python API did not start:\n${log}`);
 });
 
-after(() => {
-  server?.kill('SIGTERM');
-  if (dataDir) rmSync(dataDir, {recursive: true, force: true});
-});
+after(() => api?.stop());
 
 describe('TypeScript client against the running Python API', () => {
   it('reports health, v1, and the preserved defaults', async () => {

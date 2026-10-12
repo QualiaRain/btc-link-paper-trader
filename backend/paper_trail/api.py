@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from . import API_VERSION
 from .canonical import js_copy
 from .configuration import HORIZONS, normalize_settings
-from .records import RunStore, make_run_record, run_metadata, verify_imported_record
+from .records import RunExists, RunStore, make_run_record, run_metadata, verify_imported_record
 from .replay import run_replay
 from .schemas import (ApiError, Defaults, Health, JsonObject, ReplayRequest, ReplayResult, RunList,
                       RunMetadata, RunRecord, Settings, SettingsInput)
@@ -145,13 +145,11 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
             record = verify_imported_record(body)
         except ValueError as error:
             raise ApiProblem(422, "invalid_run_record", str(error)) from None
-        existing = runs.get(record["id"])
-        if existing is not None and not replace:
-            if existing == record:
-                return run_metadata(existing)
-            raise ApiProblem(409, "run_exists", f"A different run with id {record['id']} is already saved; "
-                                                "pass replace=true to overwrite it")
-        return run_metadata(runs.save(record))
+        try:  # conflict check and write happen atomically inside the store
+            return run_metadata(runs.save_imported(record, replace=replace))
+        except RunExists as error:
+            raise ApiProblem(409, "run_exists", f"A different run with id {error.run_id} is already saved; "
+                                                "pass replace=true to overwrite it") from None
 
     root = Path(web_dir) if web_dir else Path(os.environ.get("PAPER_TRAIL_WEB_DIR", REPO_ROOT / "web" / "public"))
     if root.is_dir():
