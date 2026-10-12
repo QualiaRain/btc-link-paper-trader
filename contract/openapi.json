@@ -1,0 +1,1853 @@
+{
+  "components": {
+    "schemas": {
+      "Account": {
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/Baseline"
+          },
+          "cash": {
+            "title": "Cash",
+            "type": "number"
+          },
+          "config": {
+            "$ref": "#/components/schemas/Config"
+          },
+          "endsAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endsat"
+          },
+          "equity": {
+            "items": {
+              "$ref": "#/components/schemas/EquityPoint"
+            },
+            "title": "Equity",
+            "type": "array"
+          },
+          "forecasts": {
+            "items": {
+              "$ref": "#/components/schemas/Forecast"
+            },
+            "title": "Forecasts",
+            "type": "array"
+          },
+          "lastDecisionAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastdecisionat"
+          },
+          "lastFrameAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastframeat"
+          },
+          "lastValidFrameAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastvalidframeat"
+          },
+          "ledger": {
+            "items": {
+              "$ref": "#/components/schemas/LedgerEvent"
+            },
+            "title": "Ledger",
+            "type": "array"
+          },
+          "positions": {
+            "$ref": "#/components/schemas/Positions"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "running",
+              "completed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "config",
+          "cash",
+          "positions",
+          "ledger",
+          "forecasts",
+          "equity",
+          "startedAt",
+          "endsAt",
+          "lastDecisionAt",
+          "lastFrameAt",
+          "lastValidFrameAt",
+          "status",
+          "baseline",
+          "sequence"
+        ],
+        "title": "Account",
+        "type": "object"
+      },
+      "ApiError": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ApiError",
+        "type": "object"
+      },
+      "AssetSummary": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "mae": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mae"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "number"
+          },
+          "samePriceMae": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Samepricemae"
+          }
+        },
+        "required": [
+          "count",
+          "mae",
+          "samePriceMae",
+          "qty"
+        ],
+        "title": "AssetSummary",
+        "type": "object"
+      },
+      "Baseline": {
+        "properties": {
+          "cash": {
+            "title": "Cash",
+            "type": "number"
+          },
+          "positions": {
+            "$ref": "#/components/schemas/Positions"
+          }
+        },
+        "required": [
+          "cash",
+          "positions"
+        ],
+        "title": "Baseline",
+        "type": "object"
+      },
+      "Candle": {
+        "additionalProperties": false,
+        "properties": {
+          "price": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Close price.",
+            "title": "Price"
+          },
+          "time": {
+            "description": "UTC close of the completed minute, in epoch milliseconds.",
+            "title": "Time",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "time",
+          "price"
+        ],
+        "title": "Candle",
+        "type": "object"
+      },
+      "CandleSeries": {
+        "additionalProperties": false,
+        "properties": {
+          "BTC": {
+            "items": {
+              "$ref": "#/components/schemas/Candle"
+            },
+            "title": "Btc",
+            "type": "array"
+          },
+          "LINK": {
+            "items": {
+              "$ref": "#/components/schemas/Candle"
+            },
+            "title": "Link",
+            "type": "array"
+          }
+        },
+        "required": [
+          "BTC",
+          "LINK"
+        ],
+        "title": "CandleSeries",
+        "type": "object"
+      },
+      "Config": {
+        "description": "Normalized, frozen rules.",
+        "properties": {
+          "allocationFraction": {
+            "title": "Allocationfraction",
+            "type": "number"
+          },
+          "bufferBps": {
+            "title": "Bufferbps",
+            "type": "number"
+          },
+          "durationMs": {
+            "title": "Durationms",
+            "type": "number"
+          },
+          "feeBps": {
+            "title": "Feebps",
+            "type": "number"
+          },
+          "horizonMs": {
+            "title": "Horizonms",
+            "type": "number"
+          },
+          "initialCash": {
+            "title": "Initialcash",
+            "type": "number"
+          },
+          "lookbackIntervals": {
+            "title": "Lookbackintervals",
+            "type": "integer"
+          },
+          "maxOutcomeLatenessMs": {
+            "title": "Maxoutcomelatenessms",
+            "type": "number"
+          },
+          "maxQuoteAgeMs": {
+            "title": "Maxquoteagems",
+            "type": "number"
+          },
+          "mode": {
+            "enum": [
+              "replay",
+              "live"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "model": {
+            "enum": [
+              "trend",
+              "same-price"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "slippageBps": {
+            "title": "Slippagebps",
+            "type": "number"
+          },
+          "stopLossBps": {
+            "title": "Stoplossbps",
+            "type": "number"
+          }
+        },
+        "required": [
+          "mode",
+          "initialCash",
+          "horizonMs",
+          "model",
+          "lookbackIntervals",
+          "bufferBps",
+          "allocationFraction",
+          "stopLossBps",
+          "feeBps",
+          "slippageBps",
+          "durationMs",
+          "maxQuoteAgeMs",
+          "maxOutcomeLatenessMs"
+        ],
+        "title": "Config",
+        "type": "object"
+      },
+      "ConfigInput": {
+        "additionalProperties": false,
+        "description": "Frozen account rules. Omitted fields take the documented defaults ($1,000 cash, 7-minute horizon, ...).",
+        "properties": {
+          "allocationFraction": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Fraction of available cash per asset, 0 to 0.5.",
+            "title": "Allocationfraction"
+          },
+          "bufferBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bufferbps"
+          },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Live-session duration; replay uses the scored range instead.",
+            "title": "Durationms"
+          },
+          "feeBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feebps"
+          },
+          "horizonMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Forecast horizon; one of 1, 5, 7, 15, 60, 420 or 1440 minutes.",
+            "title": "Horizonms"
+          },
+          "initialCash": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Starting simulated cash in USD.",
+            "title": "Initialcash"
+          },
+          "lookbackIntervals": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Earlier completed observations used by the trend rule (1-240).",
+            "title": "Lookbackintervals"
+          },
+          "maxOutcomeLatenessMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxoutcomelatenessms"
+          },
+          "maxQuoteAgeMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxquoteagems"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "replay",
+                  "live"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This service only runs replays; `live` is accepted in settings files but refused by /v1/replays.",
+            "title": "Mode"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "enum": [
+                  "trend",
+                  "same-price"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "slippageBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slippagebps"
+          },
+          "stopLossBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "0 disables the stop loss.",
+            "title": "Stoplossbps"
+          }
+        },
+        "title": "ConfigInput",
+        "type": "object"
+      },
+      "Defaults": {
+        "properties": {
+          "horizonsMs": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Horizonsms",
+            "type": "array"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          }
+        },
+        "required": [
+          "settings",
+          "horizonsMs"
+        ],
+        "title": "Defaults",
+        "type": "object"
+      },
+      "EquityPoint": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "buyHoldValue": {
+            "title": "Buyholdvalue",
+            "type": "number"
+          },
+          "cashValue": {
+            "title": "Cashvalue",
+            "type": "number"
+          },
+          "time": {
+            "title": "Time",
+            "type": "number"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "time",
+          "at",
+          "value",
+          "buyHoldValue",
+          "cashValue"
+        ],
+        "title": "EquityPoint",
+        "type": "object"
+      },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
+      "Forecast": {
+        "additionalProperties": true,
+        "properties": {
+          "actual": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual"
+          },
+          "anchor": {
+            "title": "Anchor",
+            "type": "number"
+          },
+          "asset": {
+            "enum": [
+              "BTC",
+              "LINK"
+            ],
+            "title": "Asset",
+            "type": "string"
+          },
+          "historyEnd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Historyend"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "issuedAt": {
+            "title": "Issuedat",
+            "type": "number"
+          },
+          "latenessMs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latenessms"
+          },
+          "model": {
+            "enum": [
+              "trend",
+              "same-price"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "prediction": {
+            "title": "Prediction",
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "settled",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "targetAt": {
+            "title": "Targetat",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "asset",
+          "model",
+          "issuedAt",
+          "targetAt",
+          "anchor",
+          "prediction",
+          "historyEnd",
+          "status",
+          "observedAt",
+          "actual",
+          "latenessMs"
+        ],
+        "title": "Forecast",
+        "type": "object"
+      },
+      "Hashes": {
+        "properties": {
+          "algorithm": {
+            "title": "Algorithm",
+            "type": "string"
+          },
+          "configSha256": {
+            "title": "Configsha256",
+            "type": "string"
+          },
+          "marketSha256": {
+            "title": "Marketsha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "configSha256",
+          "marketSha256"
+        ],
+        "title": "Hashes",
+        "type": "object"
+      },
+      "Health": {
+        "properties": {
+          "apiVersion": {
+            "title": "Apiversion",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "realTrading": {
+            "const": false,
+            "default": false,
+            "title": "Realtrading",
+            "type": "boolean"
+          },
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "apiVersion",
+          "engine"
+        ],
+        "title": "Health",
+        "type": "object"
+      },
+      "LedgerEvent": {
+        "additionalProperties": true,
+        "description": "Ledger entry; fields beyond the common ones depend on `type`.",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "time": {
+            "title": "Time",
+            "type": "number"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "time",
+          "at"
+        ],
+        "title": "LedgerEvent",
+        "type": "object"
+      },
+      "PerAsset": {
+        "properties": {
+          "BTC": {
+            "$ref": "#/components/schemas/AssetSummary"
+          },
+          "LINK": {
+            "$ref": "#/components/schemas/AssetSummary"
+          }
+        },
+        "required": [
+          "BTC",
+          "LINK"
+        ],
+        "title": "PerAsset",
+        "type": "object"
+      },
+      "Position": {
+        "additionalProperties": true,
+        "properties": {
+          "costBasis": {
+            "title": "Costbasis",
+            "type": "number"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "number"
+          }
+        },
+        "required": [
+          "qty",
+          "costBasis"
+        ],
+        "title": "Position",
+        "type": "object"
+      },
+      "Positions": {
+        "properties": {
+          "BTC": {
+            "$ref": "#/components/schemas/Position"
+          },
+          "LINK": {
+            "$ref": "#/components/schemas/Position"
+          }
+        },
+        "required": [
+          "BTC",
+          "LINK"
+        ],
+        "title": "Positions",
+        "type": "object"
+      },
+      "ReplayRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "candles": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandleSeries"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Required for the range source: completed one-minute closes, warmup included."
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SettingsInput"
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "title": "ReplayRequest",
+        "type": "object"
+      },
+      "ReplayResult": {
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "run": {
+            "$ref": "#/components/schemas/RunMetadata"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "run",
+          "summary",
+          "account"
+        ],
+        "title": "ReplayResult",
+        "type": "object"
+      },
+      "ReplaySettings": {
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "halfSpreadBps": {
+            "title": "Halfspreadbps",
+            "type": "number"
+          },
+          "source": {
+            "enum": [
+              "sample",
+              "range"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "start",
+          "end",
+          "halfSpreadBps"
+        ],
+        "title": "ReplaySettings",
+        "type": "object"
+      },
+      "ReplaySettingsInput": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "UTC minute `YYYY-MM-DDTHH:MM` (range source).",
+            "title": "End"
+          },
+          "halfSpreadBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Assumed half-spread each side of the close, 0-1000 bps.",
+            "title": "Halfspreadbps"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sample",
+                  "range"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "UTC minute `YYYY-MM-DDTHH:MM` (range source).",
+            "title": "Start"
+          }
+        },
+        "title": "ReplaySettingsInput",
+        "type": "object"
+      },
+      "RunList": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunMetadata"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "RunList",
+        "type": "object"
+      },
+      "RunMetadata": {
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "createdAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Createdat"
+          },
+          "hashes": {
+            "$ref": "#/components/schemas/Hashes"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "manualTradeCount": {
+            "title": "Manualtradecount",
+            "type": "integer"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "scoreEnd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scoreend"
+          },
+          "scoreStart": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scorestart"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "createdAt",
+          "updatedAt",
+          "status",
+          "config",
+          "summary",
+          "hashes",
+          "manualTradeCount",
+          "source",
+          "scoreStart",
+          "scoreEnd"
+        ],
+        "title": "RunMetadata",
+        "type": "object"
+      },
+      "RunRecord": {
+        "additionalProperties": true,
+        "description": "Full `paper-trail-run-v2` record: frozen config, account, ledger, summary, evidence and hashes.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "string"
+          },
+          "format": {
+            "const": "paper-trail-run-v2",
+            "title": "Format",
+            "type": "string"
+          },
+          "hashes": {
+            "$ref": "#/components/schemas/Hashes"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "manualTradeCount": {
+            "title": "Manualtradecount",
+            "type": "integer"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "updatedAt": {
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "format",
+          "id",
+          "name",
+          "createdAt",
+          "updatedAt",
+          "status",
+          "config",
+          "summary",
+          "account",
+          "market",
+          "hashes",
+          "manualTradeCount"
+        ],
+        "title": "RunRecord",
+        "type": "object"
+      },
+      "Settings": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/Config"
+          },
+          "format": {
+            "const": "paper-trail-settings-v2",
+            "title": "Format",
+            "type": "string"
+          },
+          "replay": {
+            "$ref": "#/components/schemas/ReplaySettings"
+          }
+        },
+        "required": [
+          "format",
+          "config",
+          "replay"
+        ],
+        "title": "Settings",
+        "type": "object"
+      },
+      "SettingsInput": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/ConfigInput"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "paper-trail-settings-v2",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "replay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReplaySettingsInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "config"
+        ],
+        "title": "SettingsInput",
+        "type": "object"
+      },
+      "Summary": {
+        "properties": {
+          "buyHoldEquity": {
+            "title": "Buyholdequity",
+            "type": "number"
+          },
+          "buyHoldReturnPct": {
+            "title": "Buyholdreturnpct",
+            "type": "number"
+          },
+          "cash": {
+            "title": "Cash",
+            "type": "number"
+          },
+          "cashBenchmark": {
+            "title": "Cashbenchmark",
+            "type": "number"
+          },
+          "drawdownPct": {
+            "title": "Drawdownpct",
+            "type": "number"
+          },
+          "equity": {
+            "title": "Equity",
+            "type": "number"
+          },
+          "expiredForecasts": {
+            "title": "Expiredforecasts",
+            "type": "integer"
+          },
+          "fees": {
+            "title": "Fees",
+            "type": "number"
+          },
+          "forecastCount": {
+            "title": "Forecastcount",
+            "type": "integer"
+          },
+          "mae": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mae"
+          },
+          "maxDrawdownPct": {
+            "title": "Maxdrawdownpct",
+            "type": "number"
+          },
+          "pendingForecasts": {
+            "title": "Pendingforecasts",
+            "type": "integer"
+          },
+          "perAsset": {
+            "$ref": "#/components/schemas/PerAsset"
+          },
+          "returnPct": {
+            "title": "Returnpct",
+            "type": "number"
+          },
+          "samePriceMae": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Samepricemae"
+          },
+          "settledForecasts": {
+            "title": "Settledforecasts",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tradeCount": {
+            "title": "Tradecount",
+            "type": "integer"
+          },
+          "valuationAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valuationat"
+          },
+          "valuationIsNetLiquidation": {
+            "title": "Valuationisnetliquidation",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "equity",
+          "cash",
+          "returnPct",
+          "buyHoldEquity",
+          "buyHoldReturnPct",
+          "cashBenchmark",
+          "drawdownPct",
+          "maxDrawdownPct",
+          "fees",
+          "tradeCount",
+          "forecastCount",
+          "settledForecasts",
+          "pendingForecasts",
+          "expiredForecasts",
+          "mae",
+          "samePriceMae",
+          "perAsset",
+          "valuationAt",
+          "valuationIsNetLiquidation"
+        ],
+        "title": "Summary",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Python owns replay, forecasting and accounting. Minute candles cannot validate millisecond predictions, and a profitable replay does not establish a reliable edge.",
+    "summary": "Replay, forecast and paper-accounting service. Simulated cash only; no orders, keys or wallets.",
+    "title": "BTC/LINK Paper Trail API",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/defaults": {
+      "get": {
+        "operationId": "getDefaults",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Defaults"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Defaults",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "service"
+        ]
+      }
+    },
+    "/v1/replays": {
+      "post": {
+        "operationId": "createReplay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplayResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Run a complete replay and save it to run history",
+        "tags": [
+          "replay"
+        ]
+      }
+    },
+    "/v1/runs": {
+      "get": {
+        "operationId": "listRuns",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Runs",
+        "tags": [
+          "history"
+        ]
+      }
+    },
+    "/v1/runs/import": {
+      "post": {
+        "description": "Checks structure, evidence hashes and summary consistency (corruption checks, not tamper-proofing). An existing run with the same id is never overwritten unless `replace=true`; importing the identical record again is a no-op.",
+        "operationId": "importRun",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "replace",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Replace",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "description": "A `paper-trail-run-v2` record exported by this service or by the browser app.",
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunMetadata"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Import a saved run exported by the browser app",
+        "tags": [
+          "history"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}": {
+      "get": {
+        "operationId": "getRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Get Run",
+        "tags": [
+          "history"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/export": {
+      "get": {
+        "operationId": "exportRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Results export: the full run record with evidence and hashes",
+        "tags": [
+          "export"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/settings": {
+      "get": {
+        "operationId": "exportRunSettings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Settings export: frozen rules and replay boundaries, importable before a new run",
+        "tags": [
+          "export"
+        ]
+      }
+    },
+    "/v1/settings/normalize": {
+      "post": {
+        "operationId": "normalizeSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Normalize",
+        "tags": [
+          "settings"
+        ]
+      }
+    }
+  }
+}

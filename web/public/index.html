@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper Trail · Python API</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">PAPER TRAIL · PYTHON API PREVIEW</p>
+    <h1>Replay on the Python backend</h1>
+    <p class="muted">Simulated cash only. This page is a TypeScript client of the versioned <code>/v1</code> API; replay, forecasts and accounting run in Python. No orders, keys or wallets. The original app remains at the repository root.</p>
+  </header>
+  <p id="notice" role="status" class="notice">Connecting…</p>
+  <section class="panel">
+    <h2>Settings</h2>
+    <form id="settings" autocomplete="off" novalidate>
+      <label>Starting cash ($)<input id="initialCash" type="number" min="1" step="any"></label>
+      <label>Forecast horizon<select id="horizonMs"></select></label>
+      <label>Rule<select id="model"><option value="trend">Trend</option><option value="same-price">Same price</option></select></label>
+      <label>Lookback intervals<input id="lookbackIntervals" type="number" min="1" max="240" step="1"></label>
+      <label>Entry buffer (bps)<input id="bufferBps" type="number" min="0" step="any"></label>
+      <label>Allocation per asset (%)<input id="allocation" type="number" min="0" max="50" step="any"></label>
+      <label>Stop loss (bps, 0 = off)<input id="stopLossBps" type="number" min="0" step="any"></label>
+      <label>Fee per fill (bps)<input id="feeBps" type="number" min="0" step="any"></label>
+      <label>Slippage per fill (bps)<input id="slippageBps" type="number" min="0" step="any"></label>
+      <label>Assumed half-spread (bps)<input id="halfSpreadBps" type="number" min="0" step="any"></label>
+      <label class="wide">Run name<input id="name" type="text" maxlength="100" placeholder="Optional"></label>
+      <div class="actions wide">
+        <button type="submit" id="run" class="primary">Run replay of included sample</button>
+        <label class="file">Import settings JSON<input id="settings-file" type="file" accept="application/json"></label>
+        <label class="file">Import saved run JSON<input id="run-file" type="file" accept="application/json"></label>
+      </div>
+    </form>
+  </section>
+  <section class="panel" id="result" hidden>
+    <h2>Result <span class="muted" id="result-name"></span></h2>
+    <dl id="metrics"></dl>
+    <div class="actions"><button id="export-run" type="button">Export run ↓</button><button id="export-settings" type="button">Export settings ↓</button></div>
+  </section>
+  <section class="panel">
+    <h2>Run history <span class="muted" id="history-count"></span></h2>
+    <div id="history"></div>
+  </section>
+  <p class="muted small">Minute candles cannot validate millisecond predictions. A profitable replay does not establish a reliable edge. Replay bid/ask is an assumed spread around candle closes, not archived order-book data.</p>
+</main>
+<script type="module" src="assets/main.js"></script>
+</body>
+</html>

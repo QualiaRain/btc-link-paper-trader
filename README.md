@@ -49,9 +49,13 @@ Local HTTP receipt time is quote availability time. The exchange ticker timestam
 
 Public snapshots do not establish executable orders. Latency, queue position, market impact, liquidity constraints, taxes and funding are not modeled. Millisecond trading is unsupported. A good historical run or a short live pilot does not prove future profit.
 
+## Python backend and TypeScript client (in progress)
+
+The app is being refactored toward a Python backend (replay, forecasts and accounting behind a versioned `/v1` API) and a TypeScript frontend that calls it. A first working slice lives in `backend/`, `web/`, `contract/` and `parity/`, with deterministic parity tests against the existing JavaScript. The Pages app above is unchanged. GitHub Pages cannot host Python, so the API runs locally for now. See [docs/BACKEND_MIGRATION.md](docs/BACKEND_MIGRATION.md) for architecture, commands, what is done and what remains.
+
 ## Local development
 
-No build or package installation is required:
+The original app needs no build or package installation:
 
 ```sh
 python3 -m http.server 8080 --bind 127.0.0.1
