@@ -22,6 +22,9 @@ export type SessionSave = Schemas['SessionSave'];
 export type AdvanceRequest = Schemas['AdvanceRequest'];
 export type OrderRequest = Schemas['OrderRequest'];
 export type LedgerEvent = Schemas['LedgerEvent'];
+export type HistoryExport = Schemas['HistoryExport'];
+export type EquityPoint = Schemas['EquityPoint'];
+export type Forecast = Schemas['Forecast'];
 export type FrameView = Schemas['FrameView'];
 
 /** Body of an advance call; `expectedVersion` is supplied by the caller separately. */
@@ -85,6 +88,8 @@ export class PaperTrailClient {
   exportRun(id: string): Promise<RunRecord> { return this.#call('GET', `/v1/runs/${encodeURIComponent(id)}/export`); }
   /** Settings export: importable via `normalizeSettings` before starting a new run. */
   exportSettings(id: string): Promise<Settings> { return this.#call('GET', `/v1/runs/${encodeURIComponent(id)}/settings`); }
+  /** Every saved run in one file (`paper-trail-history-v2`, oldest first). */
+  exportAllRuns(): Promise<HistoryExport> { return this.#call('GET', '/v1/runs/export'); }
   /** Import a `paper-trail-run-v2` record exported by the browser app or by this service. */
   importRun(record: object): Promise<RunMetadata> { return this.#call('POST', '/v1/runs/import', record); }
 

@@ -15,6 +15,7 @@ from . import API_VERSION
 from .canonical import js_copy
 from .errors import ApiProblem
 from .configuration import HORIZONS, normalize_settings
+from .candle_jobs import CandleJobService, candle_source
 from .candles_api import build_router as build_candles_router
 from .sessions_api import build_router as build_sessions_router
 from .records import (RunExists, RunOwned, RunStore, make_run_record, market_for, now_iso, run_metadata,
@@ -38,6 +39,9 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
         description="Python owns replay, forecasting and accounting. Minute candles cannot validate "
                     "millisecond predictions, and a profitable replay does not establish a reliable edge.")
     runs = store or RunStore(os.environ.get("PAPER_TRAIL_DATA_DIR"))
+    jobs = CandleJobService()
+    app.state.candle_jobs = jobs  # shared by replays and sessions that name a candle job
+    app.router.on_shutdown.append(jobs.close)
     origins = [o for o in os.environ.get("PAPER_TRAIL_CORS_ORIGINS", "").split(",") if o]
     if origins:  # off by default: the bundled UI is served same-origin
         app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"],
@@ -81,14 +85,12 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
               operation_id="createReplay", tags=["replay"],
               summary="Run a complete replay and save it to run history")
     def create_replay(body: ReplayRequest) -> dict[str, Any]:
-        if body.candleJobId is not None:  # replaced by the candle-job wiring (milestone 2)
-            raise ApiProblem(501, "not_implemented", "candleJobId is not supported yet; supply candles")
         try:
             settings = normalize_settings(_dump(body.settings))
-            candles = None
-            if body.candles is not None:
-                candles = {a: [c.model_dump() for c in getattr(body.candles, a)] for a in ("BTC", "LINK")}
+            candles, fetched = candle_source(jobs, body.candles, body.candleJobId, settings)
             account, dataset = run_replay(settings, candles)
+            if fetched is not None:
+                dataset["_fetch"] = fetched  # lets records.market_for store browser-format fetched evidence
         except ValueError as error:
             raise ApiProblem(422, "replay_rejected", str(error)) from None
         market = market_for(settings, dataset)
@@ -158,7 +160,7 @@ def create_app(store: RunStore | None = None, web_dir: str | os.PathLike | None 
                                                "close the session before importing over it") from None
 
     app.include_router(build_sessions_router(runs))
-    app.include_router(build_candles_router())
+    app.include_router(build_candles_router(jobs))
 
     root = Path(web_dir) if web_dir else Path(os.environ.get("PAPER_TRAIL_WEB_DIR", REPO_ROOT / "web" / "public"))
     if root.is_dir():

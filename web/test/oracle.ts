@@ -50,6 +50,12 @@ export interface Oracle {
   snapshot(): OracleSnapshot;
   /** The account's ledger rows, for event-level comparison. */
   ledger(): Json[];
+  /** The root engine's live account object (positions with cost basis, forecasts, equity series, ledger). Read only. */
+  account(): Json;
+  /** The root engine's getSummary() for the current account. */
+  summary(): Json;
+  /** The latest frame's quotes (what a UI may use to value positions). */
+  quotes(): Record<'BTC' | 'LINK', {bid: number; ask: number; mid: number}>;
   /** Cursor the next `decision` action would stop at, without applying it. */
   decisionTarget(): number;
 }
@@ -111,6 +117,7 @@ export async function createOracle(request: {config?: object; replay?: object} =
   return {
     scoreStart, scoreEnd, lookback: config.lookbackIntervals,
     snapshot, ledger: () => account.ledger, decisionTarget: target,
+    account: () => account, summary: () => engine.getSummary(account), quotes: () => frame.quotes as never,
     apply(action) {
       if (action.kind === 'order') {
         const before = JSON.stringify(account);

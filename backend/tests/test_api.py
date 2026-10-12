@@ -233,8 +233,3 @@ def test_export_all_runs_is_a_history_v2_file_in_creation_order(client, browser_
     assert created == sorted(created) and {r["id"] for r in body["runs"]} == {browser_completed["id"], browser_partial["id"]}
     assert all(r["format"] == "paper-trail-run-v2" for r in body["runs"])
     assert client.get(f"/v1/runs/{browser_completed['id']}").status_code == 200  # `export` is not a run id
-
-
-def test_candle_job_ids_are_refused_until_wired_rather_than_ignored(client):
-    ignored = client.post("/v1/replays", json={"settings": {"config": {}}, "candleJobId": "x"})
-    assert ignored.status_code == 501 and ignored.json()["error"]["code"] == "not_implemented"

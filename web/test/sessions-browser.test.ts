@@ -344,7 +344,7 @@ describe('stepwise session panel (real Chromium, real Python API, JS oracle)', (
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('#s-export')]);
     await idle(page);
     const record = JSON.parse(readFileSync((await download.path())!, 'utf8'));
-    const sequence = seen.order.slice(before);
+    const sequence = seen.order.slice(before).filter(line => !line.startsWith('GET ')); // reads of the account panels are not changes
     assert.deepEqual(sequence, ['POST /v1/sessions/' + finished.id + '/save'], 'export saves first');
     assert.ok(download.suggestedFilename().startsWith('paper-trail-') && download.suggestedFilename().endsWith('-run.json'));
 
@@ -408,10 +408,11 @@ describe('stepwise session panel (real Chromium, real Python API, JS oracle)', (
     assert.equal(await page.locator('#s-start').textContent(), 'Close and start a new session');
     const second = await startSession(page);
     assert.notEqual(second.id, first.id);
-    const tail = seen.order.slice(-2);
+    const tail = seen.order.filter(line => !line.startsWith('GET ')).slice(-2);
     assert.deepEqual(tail, [`DELETE /v1/sessions/${first.id}`, 'POST /v1/sessions'], 'close before create');
     assert.equal((await client.getSession(first.id)).status, 'closed');
     assert.equal((await client.getSession(second.id)).status, 'active');
+    await page.click('#view-config'); // starting a session moved the page to the Run view
     await page.click('#run');
     await page.waitForFunction(() => document.getElementById('notice')!.textContent!.startsWith('Replay complete'));
     assert.equal((await read(page)).id, second.id, 'a one-shot replay does not disturb the open session');

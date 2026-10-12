@@ -1,5 +1,9 @@
 import {ApiError, PaperTrailClient, type RunMetadata, type RunRecord, type Settings, type SettingsInput} from './client.ts';
+import {HistoryView} from './history-view.ts';
+import {RunPanels} from './run-panels.ts';
 import {SessionView} from './session-view.ts';
+import {SnapshotView} from './snapshot-view.ts';
+import {Workspace, currentRun as pointer} from './workspace.ts';
 import {EDITABLE_FIELDS, SettingsDraft, assertSupported, percent, type EditableField} from './settings-draft.ts';
 
 const client = new PaperTrailClient({baseUrl: new URLSearchParams(location.search).get('api') ?? ''});
@@ -9,6 +13,19 @@ const pct = (n: number): string => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed
 const FIELDS = ['initialCash', 'lookbackIntervals', 'bufferBps', 'stopLossBps', 'feeBps', 'slippageBps'] as const;
 let currentRun: string | null = null;
 let draft: SettingsDraft;
+type View = 'config' | 'run' | 'history';
+let historyView: HistoryView;
+let snapshots: SnapshotView;
+let sessions: SessionView;
+const refreshHistory = async (): Promise<void> => { await historyView?.refresh(); };
+
+function showView(view: View): void {
+  for (const name of ['config', 'run', 'history'] as const) {
+    $(`${name}-view`).hidden = name !== view;
+    const tab = $(`view-${name}`);
+    if (name === view) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+  }
+}
 
 function notify(text: string, error = false): void {
   $('notice').textContent = text;
@@ -58,26 +75,6 @@ function showResult(run: RunMetadata): void {
   }));
 }
 
-async function refreshHistory(): Promise<void> {
-  const runs = await client.listRuns();
-  $('history-count').textContent = `(${runs.length})`;
-  $('history').replaceChildren(...runs.map(run => {
-    const row = document.createElement('div');
-    row.className = 'run';
-    const text = document.createElement('div');
-    const title = document.createElement('strong');
-    title.textContent = run.name ?? run.id;
-    const detail = document.createElement('span');
-    detail.className = 'muted small';
-    detail.textContent = `${run.status} · ${money(run.summary.equity)} (${pct(run.summary.returnPct)}) · ${run.config['model']} · saved ${run.updatedAt ?? ''}`;
-    text.append(title, detail);
-    const open = Object.assign(document.createElement('button'), {type: 'button', textContent: 'Show'});
-    open.addEventListener('click', () => showResult(run));
-    row.append(text, open);
-    return row;
-  }));
-}
-
 async function guarded(action: () => Promise<void>): Promise<void> {
   try { await action(); } catch (error) { fail(error); }
 }
@@ -97,6 +94,22 @@ async function main(): Promise<void> {
     $(field).addEventListener('input', mark);
     $(field).addEventListener('change', mark);
   }
+  const workspace = new Workspace();
+  const panels = new RunPanels();
+  const runName = (): string | null => $<HTMLInputElement>('name').value.trim() || null;
+  sessions = new SessionView({
+    client, panels, workspace, readSettings, runName, download, onSaved: refreshHistory,
+    onStarted: () => { snapshots.close(); showView('run'); },
+    requestArchive: () => void archive(workspace, panels),
+  });
+  snapshots = new SnapshotView({client, panels, sessions, showView});
+  historyView = new HistoryView({
+    client, workspace, sessions, snapshots, download, notify, showView,
+    applySettings: (settings, name) => { applySettings(settings); $<HTMLInputElement>('name').value = name; },
+  });
+  for (const view of ['config', 'run', 'history'] as const) {
+    $(`view-${view}`).addEventListener('click', () => { showView(view); if (view === 'history') void refreshHistory(); });
+  }
   notify(`Connected to Python API v${health.apiVersion}. Defaults: ${money(defaults.settings.config.initialCash)} simulated cash.`);
   await refreshHistory();
 
@@ -114,7 +127,6 @@ async function main(): Promise<void> {
       } finally { button.disabled = false; }
     });
   });
-  new SessionView({client, readSettings, runName: () => $<HTMLInputElement>('name').value.trim() || null, download, onSaved: refreshHistory});
   $('export-run').addEventListener('click', () => void guarded(async () => {
     const id = currentRun; // the selection may change while the request is in flight
     if (!id) return;
@@ -150,6 +162,46 @@ async function main(): Promise<void> {
       notify('Saved run passed integrity checks (hashes and summary) and was added to history. These checks detect corruption, not tampering.');
     } finally { input.value = ''; }
   }));
+  await workspace.exclusive('restore', restore);
+}
+
+/** Save the live session and close it, then return to Config (the original app's "Save & start another"). */
+async function archive(workspace: Workspace, panels: RunPanels): Promise<void> {
+  await workspace.exclusive('archive', async () => {
+    if (!(await sessions.archive())) { sessions.notify('The session could not be saved, so it was left open.', true); return; }
+    snapshots.close();
+    panels.clear();
+    pointer.clear();
+    $<HTMLInputElement>('name').value = '';
+    showView('config');
+    notify('Previous run is available in History. Configure a new run.');
+    await refreshHistory();
+  });
+}
+
+/** After a reload: reattach to the live session (paused), else show its saved snapshot read-only. */
+async function restore(): Promise<void> {
+  const saved = pointer.read();
+  if (!saved) return;
+  try {
+    if (saved.sessionId) {
+      const outcome = await sessions.reattach(saved.sessionId, saved.name ?? '');
+      if (outcome === 'attached') {
+        showView('run');
+        const s = sessions.session!;
+        sessions.notify(`Reattached to your live session (paused, version ${s.version}). Nothing advanced while the page was closed.`);
+        return;
+      }
+      const why = outcome === 'closed' ? 'was closed' : 'no longer exists';
+      if (await snapshots.open(saved.runId, `Your live session ${why}. Showing its last saved snapshot, read-only.`)) return;
+    } else if (saved.readOnly) {
+      if (await snapshots.open(saved.runId, 'Reopened your last read-only snapshot.')) return;
+    }
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 404)) { fail(error); return; }
+  }
+  pointer.clear();
+  sessions.notify('Your previous session no longer exists and had no saved snapshot, so there is nothing to restore.', true);
 }
 
 main().catch(error => fail(new Error(`${error instanceof Error ? error.message : error} Start it with: python -m uvicorn --factory paper_trail.api:create_app (see docs/BACKEND_MIGRATION.md).`)));

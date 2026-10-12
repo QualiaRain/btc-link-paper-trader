@@ -3,49 +3,64 @@
 //  * every response's version is tracked and sent back as `expectedVersion`;
 //  * an operation is tied to the session generation it started in, so a late response can never
 //    update a newer (or closed) session;
-//  * manual orders and stepping happen only while paused and idle;
+//  * manual orders and stepping happen only while paused, idle and outside an exclusive transition
+//    (history actions, archiving) and never while a read-only snapshot is on screen;
 //  * a stale_session conflict refetches state and tells the person; the action is never retried.
-import {ApiError, PaperTrailClient, type Advance, type LedgerEvent, type Order, type SessionState, type SettingsInput} from './client.ts';
+import {ApiError, PaperTrailClient, type Account, type Advance, type LedgerEvent, type Order, type SessionState, type SettingsInput} from './client.ts';
+import {el, money, utc} from './format.ts';
+import type {RunPanels} from './run-panels.ts';
+import {currentRun, type Workspace} from './workspace.ts';
 
 const ASSETS = ['BTC', 'LINK'] as const;
 const PLAY_FRAMES = 8;
 const PLAY_DELAY_MS = 100;
+const PLAY_SYNC_MS = 400; // while playing, the full account is refetched at most this often
 const ACTIVITY_LIMIT = 60;
 
-const money = (n: number, digits = 2): string => n.toLocaleString('en-US', {style: 'currency', currency: 'USD', minimumFractionDigits: digits, maximumFractionDigits: digits});
-const utc = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
 const clockTime = (ms: number): string => new Date(ms).toISOString().slice(11, 19);
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+/** A session that is unknown or already closed needs no further closing. */
+const alreadyGone = (error: unknown): boolean => error instanceof ApiError && (error.status === 404 || error.code === 'session_closed');
 
 export interface SessionViewDeps {
   client: PaperTrailClient;
+  panels: RunPanels;
+  workspace: Workspace;
   /** The settings the form would send (sample replay only). May throw a readable Error. */
   readSettings(): SettingsInput;
   runName(): string | null;
   download(payload: unknown, name: string): void;
   /** Called after a snapshot reached run history. */
   onSaved(): Promise<void> | void;
+  /** A new session is on screen: leave any snapshot, show the Run view. */
+  onStarted(): void;
+  /** The person asked to save, close this session and configure another. */
+  requestArchive(): void;
 }
-
-/** A session that is unknown or already closed needs no further closing. */
-const alreadyGone = (error: unknown): boolean => error instanceof ApiError && (error.status === 404 || error.code === 'session_closed');
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
 export class SessionView {
   readonly #deps: SessionViewDeps;
   #session: SessionState | null = null;
+  #runName = '';
+  #account: Account | null = null;
+  #accountVersion = -1;
+  #lastSync = 0;
   #generation = 0;
   #busy = false;
+  #syncing = false;
   #creating = false;
   #playing = false;
   #playToken = 0;
   #pauseRequested = false;
+  #snapshotOpen = false;
   #activity: string[] = [];
+  #idleWaiters: (() => void)[] = [];
 
   constructor(deps: SessionViewDeps) {
     this.#deps = deps;
-    const on = (id: string, action: () => Promise<unknown>): void => $(id).addEventListener('click', () => void action().catch(error => this.#fail(error)));
+    const on = (id: string, action: () => unknown): void => $(id).addEventListener('click', () => void Promise.resolve(action()).catch(error => this.#fail(error)));
     on('s-start', () => this.start());
     on('s-next-frame', () => this.#advance({mode: 'frames', count: 1}, 'Next frame'));
     on('s-next-decision', () => this.#advance({mode: 'decision'}, 'Next decision'));
@@ -54,10 +69,12 @@ export class SessionView {
     on('s-save', () => this.save());
     on('s-export', () => this.exportRun());
     on('s-close', () => this.close());
+    on('s-archive', () => this.#deps.requestArchive());
     for (const asset of ASSETS) {
       on(`s-buy-${asset}`, () => this.#order({asset, side: 'buy', dollars: 100}));
       on(`s-sell-${asset}`, () => this.#order({asset, side: 'sell'}));
     }
+    deps.workspace.onChange(() => this.#render());
     this.#render();
   }
 
@@ -71,6 +88,7 @@ export class SessionView {
   #fail(error: unknown): void {
     this.#notice(error instanceof Error ? error.message : String(error), true);
   }
+  notify(text: string, error = false): void { this.#notice(text, error); }
   #log(text: string): void {
     this.#activity.unshift(text);
     this.#activity.length = Math.min(this.#activity.length, ACTIVITY_LIMIT);
@@ -89,16 +107,80 @@ export class SessionView {
     this.#playing = false;
     this.#playToken++;
   }
+  get #working(): boolean { return this.#busy || this.#syncing || this.#creating; }
 
-  // ---- start / close --------------------------------------------------------------------------
+  /** Resolves once nothing is playing or in flight for the current session (used before archiving, opening snapshots...). */
+  whenIdle(): Promise<void> {
+    if (!this.#working && !this.#playing) return Promise.resolve();
+    return new Promise(resolve => this.#idleWaiters.push(resolve));
+  }
+  /** Stop playing (if it is) and wait for the in-flight tick to land. */
+  async pause(): Promise<void> {
+    if (this.#playing) { this.#stopPlay(); this.#pauseRequested = true; this.#render(); }
+    await this.whenIdle();
+  }
+
+  setSnapshotOpen(open: boolean): void {
+    this.#snapshotOpen = open;
+    if (open) this.#stopPlay();
+    else this.#paint();
+    this.#render();
+  }
+
+  // ---- account panels ---------------------------------------------------------------------------
+  #paint(): void {
+    const s = this.#session, account = this.#account;
+    if (this.#snapshotOpen || !s || !account) return;
+    const mode = s.status === 'completed' ? 'complete' : this.#playing ? 'running' : 'paused';
+    this.#deps.panels.show({
+      name: this.#runName || `Session ${s.runId.slice(0, 8)}`,
+      badge: `${s.kind === 'sample' ? 'Sample replay' : 'UTC replay'} · ${mode}`,
+      detail: `${s.summary.tradeCount} fills · ${s.config.model} · ${s.config.horizonMs / 60000} min horizon · ${utc(s.scoreStart)} → ${utc(s.scoreEnd)} · clock ${utc(s.currentFrame.time)}`,
+      account, summary: s.summary, quotes: s.currentFrame.quotes,
+    });
+  }
+
+  /** Fetch the full account for the panels. While playing this is throttled; the ledger is appended from step events meanwhile. */
+  async #sync(force: boolean): Promise<void> {
+    const s = this.#session;
+    if (!s) return;
+    if (!force && this.#playing && Date.now() - this.#lastSync < PLAY_SYNC_MS) return;
+    const generation = this.#generation;
+    this.#syncing = true;
+    try {
+      const result = await this.#deps.client.getSessionAccount(s.id);
+      if (generation !== this.#generation) return;
+      const current = this.#session;
+      if (!current || result.state.version < current.version) return; // a newer state is already shown
+      if (result.state.version > current.version) this.#adopt(result.state);
+      this.#account = result.account;
+      this.#accountVersion = result.state.version;
+      this.#lastSync = Date.now();
+      this.#paint();
+    } catch (error) {
+      if (generation === this.#generation) this.#fail(error);
+    } finally {
+      if (generation === this.#generation) { this.#syncing = false; this.#render(); }
+    }
+  }
+
+  #appendEvents(before: SessionState, step: {state: SessionState; events: LedgerEvent[]}): void {
+    if (!this.#account || this.#accountVersion !== before.version || this.#snapshotOpen) return;
+    this.#account.ledger.push(...step.events);
+    this.#accountVersion = step.state.version;
+    this.#deps.panels.showLedger(this.#account);
+  }
+
+  // ---- start / close / reattach ---------------------------------------------------------------
   async start(): Promise<void> {
-    if (this.#creating) return;
+    if (this.#creating || this.#deps.workspace.locked) return;
     let settings: SettingsInput;
     try { settings = this.#deps.readSettings(); } catch (error) { this.#fail(error); return; }
     const previous = this.#session;
     const generation = ++this.#generation; // invalidates every in-flight operation of the old session
     this.#stopPlay();
     this.#busy = false;
+    this.#syncing = false;
     this.#creating = true;
     this.#render();
     try {
@@ -113,6 +195,7 @@ export class SessionView {
         }
         if (generation !== this.#generation) return;
         this.#session = null;
+        this.#account = null;
         this.#render();
       }
       this.#notice('Starting a stepwise session on the Python backend…');
@@ -122,8 +205,14 @@ export class SessionView {
         return;
       }
       this.#session = state;
+      this.#account = null;
+      this.#runName = this.#deps.runName() ?? '';
       this.#activity = [];
+      currentRun.write({runId: state.runId, sessionId: state.id, name: this.#runName});
       this.#log(`${this.#stamp(state)} Session started at the first scored frame`);
+      this.#snapshotOpen = false;
+      this.#deps.onStarted();
+      await this.#sync(true);
       this.#notice(`Session started at ${utc(state.currentFrame.time)}. Warmup is excluded; later frames stay hidden until you advance.`);
     } catch (error) {
       if (generation === this.#generation) this.#fail(error);
@@ -132,29 +221,72 @@ export class SessionView {
     }
   }
 
-  async close(): Promise<void> {
+  /** Reattach to a session that outlived a page reload. It comes back paused at the server's version. */
+  async reattach(sessionId: string, name = ''): Promise<'attached' | 'closed' | 'missing'> {
+    if (this.#creating) return 'missing';
+    const generation = ++this.#generation;
+    this.#creating = true;
+    this.#render();
+    try {
+      let state: SessionState;
+      try { state = await this.#deps.client.getSession(sessionId); }
+      catch (error) {
+        if (error instanceof ApiError && error.status === 404) return 'missing';
+        throw error;
+      }
+      if (generation !== this.#generation) return 'missing';
+      if (state.status === 'closed') return 'closed';
+      this.#session = state;
+      this.#account = null;
+      this.#runName = name;
+      this.#activity = [];
+      this.#log(`${this.#stamp(state)} Reattached to the live session (paused, version ${state.version})`);
+      currentRun.write({runId: state.runId, sessionId: state.id, name});
+      await this.#sync(true);
+      return 'attached';
+    } finally {
+      if (generation === this.#generation) { this.#creating = false; this.#render(); }
+    }
+  }
+
+  async close(quiet = false): Promise<void> {
     const current = this.#session;
     if (!current || this.#creating) return;
     ++this.#generation;
     this.#stopPlay();
     this.#busy = false;
+    this.#syncing = false;
     this.#session = null;
+    this.#account = null;
+    currentRun.clear();
+    if (!this.#snapshotOpen) this.#deps.panels.clear();
     this.#render();
     const unsaved = current.savedVersion !== current.version;
     try {
       await this.#deps.client.closeSession(current.id);
-      this.#notice(unsaved ? 'Session closed. Progress after the last snapshot was discarded; saved snapshots remain in run history.' : 'Session closed. The saved snapshot remains in run history.');
+      if (!quiet) this.#notice(unsaved ? 'Session closed. Progress after the last snapshot was discarded; saved snapshots remain in run history.' : 'Session closed. The saved snapshot remains in run history.');
     } catch (error) {
-      if (alreadyGone(error)) this.#notice('Session closed.');
+      if (alreadyGone(error)) { if (!quiet) this.#notice('Session closed.'); }
       else this.#fail(error);
     }
+  }
+
+  /** Save (if there is unsaved progress), then close the session. Returns false when the save failed and the session stays open. */
+  async archive(): Promise<boolean> {
+    if (!this.#session) return true;
+    await this.pause();
+    const s = this.#session;
+    if (!s) return true;
+    if (s.savedVersion !== s.version && !(await this.save())) return false;
+    await this.close(true);
+    return true;
   }
 
   // ---- operations -----------------------------------------------------------------------------
   /** Runs one server call for the current session. Returns true when its result was applied. */
   async #act<T>(call: (session: SessionState) => Promise<T>, apply: (result: T) => void): Promise<boolean> {
     const session = this.#session;
-    if (!session || this.#busy || this.#creating) return false;
+    if (!session || this.#working) return false;
     const generation = this.#generation;
     this.#busy = true;
     this.#render();
@@ -162,6 +294,8 @@ export class SessionView {
       const result = await call(session);
       if (generation !== this.#generation) return false; // the session was replaced or closed meanwhile
       apply(result);
+      this.#render();
+      await this.#sync(false);
       return true;
     } catch (error) {
       if (generation !== this.#generation) return false;
@@ -181,11 +315,13 @@ export class SessionView {
         const fresh = await this.#deps.client.getSession(session.id);
         if (generation !== this.#generation) return;
         this.#adopt(fresh);
+        await this.#sync(true);
       } catch (refetch) {
         if (generation !== this.#generation) return;
         this.#fail(refetch);
         return;
       }
+      if (generation !== this.#generation) return;
       this.#log(`${clockTime(this.#session?.currentFrame.time ?? session.currentFrame.time)} Stale action ignored (had version ${session.version}, server at ${held})`);
       this.#notice(`Stale session: this session changed elsewhere (you had version ${session.version}, the server is at ${held}). The latest state was loaded and your action was not applied. Repeat it if you still want it.`, true);
       return;
@@ -193,8 +329,9 @@ export class SessionView {
     if (error.code === 'session_completed') {
       try {
         const fresh = await this.#deps.client.getSession(session.id);
-        if (generation === this.#generation) this.#adopt(fresh);
+        if (generation === this.#generation) { this.#adopt(fresh); await this.#sync(true); }
       } catch { /* the notice below is enough */ }
+      if (generation !== this.#generation) return;
       this.#log(`${clockTime(this.#session?.currentFrame.time ?? session.currentFrame.time)} Rejected: ${error.message}`);
       this.#notice(`Session completed: ${error.message}`, true);
       return;
@@ -206,6 +343,9 @@ export class SessionView {
     }
     if (error.status === 404) {
       this.#session = null;
+      this.#account = null;
+      currentRun.clear();
+      this.#deps.panels.clear();
       this.#notice(`The session no longer exists on the server (${error.message}). Start a new one.`, true);
       return;
     }
@@ -231,7 +371,9 @@ export class SessionView {
     return this.#act(
       session => this.#deps.client.advance(session.id, advance, session.version),
       step => {
+        const before = this.#session!;
         this.#adopt(step.state);
+        this.#appendEvents(before, step);
         const now = this.#session!;
         for (const line of this.#describe(step.events).reverse()) this.#log(line);
         const frames = `${step.framesIngested} frame${step.framesIngested === 1 ? '' : 's'}`;
@@ -249,7 +391,9 @@ export class SessionView {
     return this.#act(
       session => this.#deps.client.placeOrder(session.id, order, session.version),
       step => {
+        const before = this.#session!;
         this.#adopt(step.state);
+        this.#appendEvents(before, step);
         for (const line of this.#describe(step.events).reverse()) this.#log(line);
         this.#notice(`Manual paper ${order.side} ${order.asset} recorded. This run now includes manual changes.`);
       });
@@ -276,28 +420,36 @@ export class SessionView {
       await sleep(PLAY_DELAY_MS);
     }
     if (this.#generation !== generation) return;
-    if (this.#playToken === token) {
-      this.#playing = false;
+    const ownLoop = this.#playToken === token;
+    if (ownLoop) this.#playing = false;
+    const pausedByPerson = !ownLoop && this.#pauseRequested && !this.#playing;
+    if (ownLoop || pausedByPerson) await this.#sync(true); // the panels catch up with everything the throttle skipped
+    if (this.#generation !== generation) return;
+    if (ownLoop) {
       if (this.#session?.status === 'completed') this.#notice('Replay complete at the exact final close. Positions were closed with modeled exit costs.');
-    } else if (this.#pauseRequested && !this.#playing) {
+    } else if (pausedByPerson) {
       const s = this.#session;
       if (s) this.#notice(`Paused at ${utc(s.currentFrame.time)}. No further frames are being ingested.`);
     }
     this.#pauseRequested = false;
     this.#render();
+    this.#paint();
   }
 
   #canStep(): boolean {
     const s = this.#session;
-    return !!s && s.status === 'active' && !this.#busy && !this.#creating;
+    return !!s && s.status === 'active' && !this.#working && !this.#deps.workspace.locked && !this.#snapshotOpen;
   }
 
   async save(): Promise<boolean> {
+    if (this.#snapshotOpen) return false;
     const name = this.#deps.runName();
     const saved = await this.#act(
       session => this.#deps.client.saveSession(session.id, session.version, name),
       result => {
         this.#adopt(result.state);
+        if (name) this.#runName = name;
+        currentRun.write({runId: result.state.runId, sessionId: result.state.id, name: this.#runName});
         this.#log(`${this.#stamp(result.state)} Snapshot saved to run history as ${result.run.id}`);
         this.#notice(`Snapshot saved to run history (run ${result.run.id}). Closing this session keeps it.`);
       });
@@ -306,6 +458,7 @@ export class SessionView {
   }
 
   async exportRun(): Promise<void> {
+    if (this.#snapshotOpen) return;
     let exported: {runId: string; record: unknown} | null = null;
     const name = this.#deps.runName();
     const saved = await this.#act(
@@ -329,28 +482,39 @@ export class SessionView {
   #render(): void {
     const s = this.#session;
     const root = $('session-panel');
+    const locked = this.#deps.workspace.locked;
     root.dataset['status'] = s?.status ?? 'none';
     root.dataset['version'] = String(s?.version ?? '');
     root.dataset['sessionId'] = s?.id ?? '';
+    root.dataset['runId'] = s?.runId ?? '';
     root.dataset['playing'] = String(this.#playing);
-    root.dataset['busy'] = String(this.#busy || this.#creating);
-    $('s-state').hidden = !s;
+    root.dataset['busy'] = String(this.#working || locked);
+    root.dataset['snapshot'] = String(this.#snapshotOpen);
+    $('s-state').hidden = !s || this.#snapshotOpen;
     $('s-empty').hidden = !!s;
-    const idle = !!s && s.status === 'active' && !this.#busy && !this.#creating && !this.#playing;
+    $('s-background').hidden = !s || !this.#snapshotOpen;
+    const idle = !!s && s.status === 'active' && !this.#working && !this.#playing && !locked && !this.#snapshotOpen;
     const set = (id: string, enabled: boolean): void => { $<HTMLButtonElement>(id).disabled = !enabled; };
-    set('s-start', !this.#creating);
+    set('s-start', !this.#creating && !locked);
     set('s-next-frame', idle);
     set('s-next-decision', idle);
     set('s-finish', idle);
-    set('s-play', !!s && s.status === 'active' && !this.#creating && (this.#playing || !this.#busy));
+    set('s-play', !!s && s.status === 'active' && !this.#creating && !locked && !this.#snapshotOpen && (this.#playing || !this.#working));
     $('s-play').textContent = this.#playing ? 'Pause' : 'Play';
-    set('s-save', !!s && !this.#busy && !this.#creating && !this.#playing);
-    set('s-export', !!s && !this.#busy && !this.#creating && !this.#playing);
-    set('s-close', !!s && !this.#creating);
+    const quiet = !!s && !this.#working && !this.#playing && !locked && !this.#snapshotOpen;
+    set('s-save', quiet);
+    set('s-export', quiet);
+    set('s-archive', quiet);
+    set('s-close', !!s && !this.#creating && !locked);
     for (const asset of ASSETS) { set(`s-buy-${asset}`, idle); set(`s-sell-${asset}`, idle); }
     $('s-start').textContent = s ? 'Close and start a new session' : 'Start session';
     if (s) this.#renderState(s);
-    $('s-activity').replaceChildren(...this.#activity.map(text => Object.assign(document.createElement('li'), {textContent: text})));
+    $('s-activity').replaceChildren(...this.#activity.map(text => el('li', '', text)));
+    if (!this.#working && !this.#playing) {
+      const waiters = this.#idleWaiters;
+      this.#idleWaiters = [];
+      for (const resolve of waiters) resolve();
+    }
   }
 
   #renderState(s: SessionState): void {
