@@ -41,6 +41,13 @@ is off by default (`PAPER_TRAIL_CORS_ORIGINS` enables it).
 ## Run it
 
 ```sh
+scripts/run-local.sh          # installs into .venv and web/node_modules on first run, builds the UI,
+                              # keeps saved runs in .paper-trail-data/, serves http://127.0.0.1:8000/ (PORT to change)
+```
+
+The script runs these steps, which also work by hand (development installs add `[dev]` for the tests):
+
+```sh
 pip install -e "backend[dev]"
 npm ci --prefix web && npm run build --prefix web
 cd backend && python -m uvicorn --factory paper_trail.api:create_app --host 127.0.0.1 --port 8000
@@ -170,7 +177,8 @@ hashes): someone who edits the account and recomputes the summary passes (a test
 ## GitHub Pages constraint
 
 GitHub Pages serves static files only and cannot run Python. The Pages app therefore stays on its JavaScript engine until a
-host for the API is chosen; that is a hosting/cost decision this work does not make. Until then the Python API runs locally.
+host for the API is chosen. **Decision (October 2026): local only for now.** The Python version runs on the operator's
+machine via `scripts/run-local.sh`, bound to 127.0.0.1; nothing is hosted.
 The TypeScript client takes a `baseUrl` (or `?api=http://host:port` in the UI), so once an API host exists the static
 frontend can be published from Pages and pointed at it, after the hardening below.
 
@@ -181,7 +189,7 @@ frontend can be published from Pages and pointed at it, after the hardening belo
 2. **Hardening before any remote hosting**: authentication, a CORS allow-list, request-size and rate limits, quotas on runs,
    sessions, jobs and ticks (any API caller can currently trigger outbound public-data fetches), pagination, and a review of
    the environment-controlled upstream base URLs.
-3. **Hosting decision** for the API (no host, account or paid service was provisioned).
+3. **Hosting**: decided local only for now. Item 2 is required before any remote hosting is reconsidered.
 4. **Session durability**: sessions are in memory; resuming a saved snapshot as a live session after a restart is not supported.
 5. **UI polish**: pixel/wording parity with the original, accessibility audit, small-screen review.
 6. **Large-range performance**: a 31-day range record serializes in seconds (about 5 s measured); acceptable locally, worth
