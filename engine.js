@@ -127,8 +127,20 @@ function prediction(a,asset,frame) {
   return {anchor,prediction:anchor*Math.exp(drift),historyEnd:last[0]};
 }
 
+// Index of the first forecast that may still be pending, per account. Settled and expired
+// forecasts never return to pending, so earlier ones need no rescanning. Kept outside the
+// account so saved records are unchanged; a restored account simply starts from zero.
+const firstPending=new WeakMap();
+
 function settle(a,frame) {
-  for (const f of a.forecasts) {
+  let start=firstPending.get(a)??0;
+  while (start<a.forecasts.length&&a.forecasts[start].status!=='pending') start++;
+  firstPending.set(a,start);
+  for (let i=start;i<a.forecasts.length;i++) {
+    const f=a.forecasts[i];
+    // Forecasts are issued in time order with one frozen horizon, so targets never decrease:
+    // once a target is in the future, every later one is too.
+    if (frame.time<f.targetAt) break;
     const q=frame.quotes[f.asset];
     if (f.status!=='pending'||frame.time<=f.issuedAt||frame.time<f.targetAt||q.observedAt<f.targetAt) continue;
     const lateness=q.observedAt-f.targetAt;
