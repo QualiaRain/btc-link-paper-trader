@@ -13,6 +13,7 @@ validate millisecond predictions, and a profitable replay does not establish a r
 | Area | State |
 | --- | --- |
 | Python engine, settings, replay (sample + UTC range), run records, run history, exports | Done, JS-parity tested |
+| Account risk limits (`maxDrawdownBps`, `dailyLossBps`), idle cash yield (`cashYieldBps`), 2 bps fee / 3 bps half-spread defaults (main PR #5) | Done, JS-parity tested (`risk-limits`, `cash-yield` and session scenarios) and in the UI |
 | Stepwise sessions (advance by frames / next decision / finish), manual paper orders, stale-action and run-ownership protection | Done, JS-parity + real API/browser tests |
 | Server-side candle retrieval (retries, receipts, cancellation, progress) and candle jobs | Done, tested against the existing JS and a loopback server |
 | Browser-format run evidence (packed history catalog, last observed frame, matching `marketSha256`) | Done for sample and fetched runs; verified with the real `history.js` |
@@ -61,7 +62,7 @@ Errors are always `{"error": {"code", "message"}}` (plus `currentVersion` on `st
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /v1/health`, `GET /v1/defaults` | Version check (`realTrading` is always `false`); documented defaults ($1,000, 7-minute horizon, 7 lookback, 10 bps buffer, 50% per asset, no stop, 10 bps fee, 2 bps slippage, 2 bps assumed half-spread) and horizons |
+| `GET /v1/health`, `GET /v1/defaults` | Version check (`realTrading` is always `false`); documented defaults ($1,000, 7-minute horizon, 7 lookback, 10 bps buffer, 50% per asset, no stop, no drawdown or daily loss limit, 0% cash yield, 2 bps fee, 2 bps slippage, 3 bps assumed half-spread) and horizons |
 | `POST /v1/settings/normalize` | Validate settings (same rules and messages as `configuration.js`) |
 | `POST /v1/replays` | Run a whole replay (sample, or a UTC range from inline `candles` or a completed `candleJobId`) and save it |
 | `POST /v1/candle-jobs`, `GET /v1/candle-jobs/{id}`, `POST /v1/candle-jobs/{id}/cancel` | Server-side retrieval of completed one-minute closes: progress, receipts (URL, arrival time, SHA-256 of the raw body, attempts), coverage, cancellation |
@@ -97,11 +98,24 @@ Regenerate after changing the API: `python -m paper_trail.contract` (in `backend
 Seeded, clock-free inputs are run through the **existing** JS modules to produce goldens, and Python must reproduce them
 (exact for integers/strings/structure; floats within 1e-12 relative, though Python currently matches bit for bit).
 Areas: base accounting and settings (chronology, missing/stale/crossed quotes, outcome expiry, warmup, fees/slippage,
-positions, stop loss, canonical hashing, sample and range replays), `sessions/` (11 scenarios), `candles/` (retrieval with
+positions, stop loss, risk limits, cash yield, canonical hashing, sample and range replays), `sessions/` (13 scenarios), `candles/` (retrieval with
 stubbed `fetch`: retries, errors, gaps, boundaries), `evidence/` (packing and hashes), `live/` (24 fetch + 6 session
 scenarios with stubbed `fetch` and `Date.now`). A JS freshness test per area fails if a golden stops matching the JS, and
 exact-boundary cases make off-by-one regressions fail. Frontend tests compare the UI and API with an independent oracle
 that replays the same actions through the root `engine.js`/`replay.js`.
+
+## Risk limits and cash yield
+
+Ported from `engine.js` with the same rules, event shapes and messages. `maxDrawdownBps` and `dailyLossBps` (0-9999, 0 =
+off) are checked at observed frames before decisions: a breach writes a `risk_halt` event, closes positions at modeled exit
+costs and blocks entries (drawdown: for the rest of the session; daily loss: until the next UTC day, which writes
+`risk_resume`). Halted decisions still issue and score forecasts and carry `blockedBy`/`wouldBuy`; manual buys are refused
+(`order_rejected` with the engine's message). `account.risk` exists only when a limit is configured. `cashYieldBps` (0-2000,
+annual) compounds idle cash continuously over the time since the previous valid frame, stops at completion, and the cash
+benchmark grows at the same rate (`account.interest`, `summary.interestEarned`). The summary also reports `riskHalts` and
+`tradingHalted`. Accounts saved before these fields have none of the config keys and run without limits or yield; imports
+accept a stored summary without the new fields only when the recomputed values are the neutral ones (0 / null), so older
+browser exports still import.
 
 ## Saved runs and exports
 
