@@ -17,8 +17,10 @@ def test_health_and_defaults_preserve_documented_defaults(client):
     defaults = client.get("/v1/defaults").json()
     c = defaults["settings"]["config"]
     assert (c["initialCash"], c["horizonMs"], c["lookbackIntervals"], c["bufferBps"], c["allocationFraction"],
-            c["stopLossBps"], c["feeBps"], c["slippageBps"], c["model"]) == (1000, 420000, 7, 10, 0.5, 0, 10, 2, "trend")
-    assert defaults["settings"]["replay"] == {"source": "sample", "start": "", "end": "", "halfSpreadBps": 2}
+            c["stopLossBps"], c["feeBps"], c["slippageBps"], c["model"]) == (1000, 420000, 7, 10, 0.5, 0, 2, 2, "trend")
+    # Risk limits and cash yield are off by default.
+    assert (c["maxDrawdownBps"], c["dailyLossBps"], c["cashYieldBps"]) == (0, 0, 0)
+    assert defaults["settings"]["replay"] == {"source": "sample", "start": "", "end": "", "halfSpreadBps": 3}
     assert defaults["horizonsMs"] == [60000, 300000, 420000, 900000, 3600000, 25200000, 86400000]
 
 

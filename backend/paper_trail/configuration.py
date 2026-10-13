@@ -11,8 +11,8 @@ from .engine import create_account, finite
 
 HORIZONS = [60000, 300000, 420000, 900000, 3600000, 25200000, 86400000]
 CONFIG_FIELDS = ["initialCash", "horizonMs", "model", "lookbackIntervals", "bufferBps",
-                 "allocationFraction", "stopLossBps", "feeBps", "slippageBps", "durationMs",
-                 "maxQuoteAgeMs", "maxOutcomeLatenessMs"]
+                 "allocationFraction", "stopLossBps", "maxDrawdownBps", "dailyLossBps", "cashYieldBps",
+                 "feeBps", "slippageBps", "durationMs", "maxQuoteAgeMs", "maxOutcomeLatenessMs"]
 SETTINGS_FORMAT = "paper-trail-settings-v2"
 _MINUTE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
 
@@ -65,7 +65,7 @@ def normalize_settings(raw_input: Any, now_ms: float | None = None, check_range_
     source = replay.get("source") if replay.get("source") is not None else "sample"
     if source not in ("sample", "range"):
         raise ValueError("Replay source must be sample or range.")
-    half_spread = replay.get("halfSpreadBps") if replay.get("halfSpreadBps") is not None else 2
+    half_spread = replay.get("halfSpreadBps") if replay.get("halfSpreadBps") is not None else 3
     if not finite(half_spread) or half_spread < 0 or half_spread > 1000:
         raise ValueError("Assumed replay half-spread must be between 0 and 1,000 basis points.")
     start = replay.get("start") if replay.get("start") is not None else ""

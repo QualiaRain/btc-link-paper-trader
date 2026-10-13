@@ -49,3 +49,29 @@ def test_store_ignores_corrupt_files_and_keeps_listing_order(tmp_path):
     (tmp_path / "bad.json").write_text(json.dumps({"format": "other"}))
     reopened = RunStore(tmp_path)
     assert {r["id"] for r in reopened.list()} == {"a", "b"}
+
+
+def test_records_with_risk_halts_and_cash_yield_round_trip_through_import():
+    settings = normalize_settings({"config": {"maxDrawdownBps": 40, "dailyLossBps": 25, "cashYieldBps": 2000,
+                                              "bufferBps": 0, "horizonMs": 300000}})
+    account, dataset = run_replay(settings)
+    record = json.loads(json.dumps(make_run_record(account, {"kind": "sample"}, name="risk", run_id="risk")))
+    summary = record["summary"]
+    assert summary["riskHalts"] > 0 and summary["interestEarned"] > 0 and summary["cashBenchmark"] > 1000
+    assert "risk" in record["account"] and record["account"]["interest"] == summary["interestEarned"]
+    assert verify_imported_record(record) is record
+
+
+def test_records_saved_before_risk_limits_and_cash_yield_still_import(browser_completed):
+    """Old browser records have no limit/yield config fields and no matching summary fields."""
+    assert "cashYieldBps" not in browser_completed["config"] and "riskHalts" not in browser_completed["summary"]
+    assert verify_imported_record(browser_completed) is browser_completed
+
+
+def test_missing_summary_fields_are_accepted_only_when_the_feature_was_unused():
+    settings = normalize_settings({"config": {"cashYieldBps": 2000, "horizonMs": 300000}})
+    account, _ = run_replay(settings)
+    record = json.loads(json.dumps(make_run_record(account, {"kind": "sample"}, run_id="y")))
+    del record["summary"]["interestEarned"]  # interest was earned, so its absence is a mismatch
+    with pytest.raises(ValueError, match="summary does not match"):
+        verify_imported_record(record)

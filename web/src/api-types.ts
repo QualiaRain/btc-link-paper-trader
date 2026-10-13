@@ -364,6 +364,11 @@ export interface components {
             equity: components["schemas"]["EquityPoint"][];
             /** Forecasts */
             forecasts: components["schemas"]["Forecast"][];
+            /**
+             * Interest
+             * @description Cash yield earned so far; present once any interest accrues.
+             */
+            interest?: number | null;
             /** Lastdecisionat */
             lastDecisionAt: number | null;
             /** Lastframeat */
@@ -373,6 +378,8 @@ export interface components {
             /** Ledger */
             ledger: components["schemas"]["LedgerEvent"][];
             positions: components["schemas"]["Positions"];
+            /** @description Present only when a risk limit is configured. */
+            risk?: components["schemas"]["RiskState"] | null;
             /** Sequence */
             sequence: number;
             /** Startedat */
@@ -503,6 +510,18 @@ export interface components {
             allocationFraction: number;
             /** Bufferbps */
             bufferBps: number;
+            /**
+             * Cashyieldbps
+             * @description Absent in accounts saved before cash yield existed (no yield).
+             * @default 0
+             */
+            cashYieldBps: number;
+            /**
+             * Dailylossbps
+             * @description Absent in accounts saved before risk limits existed (no limit).
+             * @default 0
+             */
+            dailyLossBps: number;
             /** Durationms */
             durationMs: number;
             /** Feebps */
@@ -513,6 +532,12 @@ export interface components {
             initialCash: number;
             /** Lookbackintervals */
             lookbackIntervals: number;
+            /**
+             * Maxdrawdownbps
+             * @description Absent in accounts saved before risk limits existed (no limit).
+             * @default 0
+             */
+            maxDrawdownBps: number;
             /** Maxoutcomelatenessms */
             maxOutcomeLatenessMs: number;
             /** Maxquoteagems */
@@ -545,6 +570,16 @@ export interface components {
             /** Bufferbps */
             bufferBps?: number | null;
             /**
+             * Cashyieldbps
+             * @description Annual yield on idle cash, 0-2000 bps, compounded continuously; 0 disables it.
+             */
+            cashYieldBps?: number | null;
+            /**
+             * Dailylossbps
+             * @description Loss limit from the UTC day's first observed net value, 0-9999 bps; 0 disables it. A breach closes positions and blocks new entries until the next UTC day.
+             */
+            dailyLossBps?: number | null;
+            /**
              * Durationms
              * @description Live-session duration; replay uses the scored range instead.
              */
@@ -566,6 +601,11 @@ export interface components {
              * @description Earlier completed observations used by the trend rule (1-240).
              */
             lookbackIntervals?: number | null;
+            /**
+             * Maxdrawdownbps
+             * @description Account drawdown limit from the observed peak net value, 0-9999 bps; 0 disables it. A breach closes positions and blocks new entries for the rest of the session.
+             */
+            maxDrawdownBps?: number | null;
             /** Maxoutcomelatenessms */
             maxOutcomeLatenessMs?: number | null;
             /** Maxquoteagems */
@@ -869,6 +909,28 @@ export interface components {
              */
             start?: string | null;
         };
+        /**
+         * RiskState
+         * @description Account-level limit state; present only when a drawdown or daily loss limit is configured.
+         */
+        RiskState: {
+            /** Dayopenvalue */
+            dayOpenValue: number | null;
+            /** Daystart */
+            dayStart: number | null;
+            /**
+             * Halteduntil
+             * @description Set while the daily loss limit halts entries (next UTC midnight).
+             */
+            haltedUntil: number | null;
+            /**
+             * Killedat
+             * @description Set when the drawdown limit halted entries for the session.
+             */
+            killedAt: number | null;
+            /** Peakvalue */
+            peakValue: number;
+        };
         /** RunList */
         RunList: {
             /** Runs */
@@ -1056,7 +1118,10 @@ export interface components {
             buyHoldReturnPct: number;
             /** Cash */
             cash: number;
-            /** Cashbenchmark */
+            /**
+             * Cashbenchmark
+             * @description Initial cash grown at the configured cash yield to the valuation time.
+             */
             cashBenchmark: number;
             /** Drawdownpct */
             drawdownPct: number;
@@ -1068,6 +1133,12 @@ export interface components {
             fees: number;
             /** Forecastcount */
             forecastCount: number;
+            /**
+             * Interestearned
+             * @description Absent in summaries saved before cash yield existed.
+             * @default 0
+             */
+            interestEarned: number;
             /** Mae */
             mae: number | null;
             /** Maxdrawdownpct */
@@ -1077,6 +1148,12 @@ export interface components {
             perAsset: components["schemas"]["PerAsset"];
             /** Returnpct */
             returnPct: number;
+            /**
+             * Riskhalts
+             * @description Number of `risk_halt` events. Absent in summaries saved before risk limits existed.
+             * @default 0
+             */
+            riskHalts: number;
             /** Samepricemae */
             samePriceMae: number | null;
             /** Settledforecasts */
@@ -1085,6 +1162,11 @@ export interface components {
             status: string;
             /** Tradecount */
             tradeCount: number;
+            /**
+             * Tradinghalted
+             * @description The limit currently blocking new entries, or null. Absent in summaries saved before risk limits existed.
+             */
+            tradingHalted?: ("max_drawdown" | "daily_loss") | null;
             /** Valuationat */
             valuationAt: number | null;
             /** Valuationisnetliquidation */

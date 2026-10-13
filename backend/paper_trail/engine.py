@@ -16,11 +16,14 @@ ASSETS = ("BTC", "LINK")
 MAX_FLOAT = sys.float_info.max  # Number.MAX_VALUE
 
 DEFAULTS: dict[str, Any] = {
-    "initialCash": 1000, "horizonMs": 420000, "feeBps": 10, "slippageBps": 2,
+    "initialCash": 1000, "horizonMs": 420000, "feeBps": 2, "slippageBps": 2,
     "bufferBps": 10, "model": "trend", "mode": "replay", "durationMs": 48 * 3600000,
     "maxQuoteAgeMs": 60000, "maxOutcomeLatenessMs": 30000, "lookbackIntervals": 7,
     "allocationFraction": 0.5, "stopLossBps": 0,
+    "maxDrawdownBps": 0, "dailyLossBps": 0, "cashYieldBps": 0,
 }
+DAY = 86400000
+YEAR = 365 * DAY
 
 
 def iso(t: float) -> str:
@@ -67,8 +70,11 @@ def create_account(config: Any = None) -> dict[str, Any]:
     c["lookbackIntervals"] = int(lookback)
     if not finite(c["allocationFraction"]) or c["allocationFraction"] < 0 or c["allocationFraction"] > 0.5:
         raise ValueError("allocationFraction must be between 0 and 0.5")
-    if not finite(c["stopLossBps"]) or c["stopLossBps"] < 0 or c["stopLossBps"] > 9999:
-        raise ValueError("stopLossBps must be between 0 and 9999")
+    for key in ("stopLossBps", "maxDrawdownBps", "dailyLossBps"):
+        if not finite(c[key]) or c[key] < 0 or c[key] > 9999:
+            raise ValueError(f"{key} must be between 0 and 9999")
+    if not finite(c["cashYieldBps"]) or c["cashYieldBps"] < 0 or c["cashYieldBps"] > 2000:
+        raise ValueError("cashYieldBps must be between 0 and 2000")
     return {
         "config": c, "cash": c["initialCash"],
         "positions": {"BTC": {"qty": 0, "costBasis": 0}, "LINK": {"qty": 0, "costBasis": 0}},
@@ -166,9 +172,30 @@ def _start(a: dict, frame: dict) -> None:
         _fill(a, a["baseline"], s, "buy", budget, frame, "benchmark")
 
 
+def _setting(a: dict, key: str) -> float:
+    """`a.config[key] || 0`: accounts saved before a setting existed run without it."""
+    return a["config"].get(key) or 0
+
+
+# Idle cash earns the configured annual yield, compounded continuously over the
+# elapsed time since the previous valid frame, including unobserved gaps.
+def _growth(a: dict, ms: float) -> float:
+    return math.exp(_setting(a, "cashYieldBps") / 10000 * ms / YEAR)
+
+
+def _accrue(a: dict, frame: dict) -> None:
+    if not _setting(a, "cashYieldBps") or a["lastValidFrameAt"] is None \
+            or not frame["time"] > a["lastValidFrameAt"] or not a["cash"] > 0:
+        return
+    earned = a["cash"] * (_growth(a, frame["time"] - a["lastValidFrameAt"]) - 1)
+    a["cash"] += earned
+    a["interest"] = (a.get("interest") if a.get("interest") is not None else 0) + earned
+
+
 def _mark(a: dict, frame: dict) -> None:
     point = {"time": frame["time"], "at": iso(frame["time"]), "value": _liquidation(a, a, frame),
-             "buyHoldValue": _liquidation(a, a["baseline"], frame), "cashValue": a["config"]["initialCash"]}
+             "buyHoldValue": _liquidation(a, a["baseline"], frame),
+             "cashValue": a["config"]["initialCash"] * _growth(a, frame["time"] - a["startedAt"])}
     if a["equity"] and a["equity"][-1]["time"] == frame["time"]:
         a["equity"][-1] = point
     else:
@@ -261,6 +288,60 @@ def _stop_positions(a: dict, frame: dict) -> set[str]:
     return stopped
 
 
+# Account-level hard limits, checked at observed frames before decisions. A breach
+# closes positions at modeled exit costs and blocks new entries; forecasts continue.
+# Risk state exists only when a limit is configured.
+def _halt_reason(a: dict) -> str | None:
+    risk = a.get("risk")
+    if not isinstance(risk, dict):
+        return None
+    if risk.get("killedAt") is not None:
+        return "max_drawdown"
+    if risk.get("haltedUntil") is not None:
+        return "daily_loss"
+    return None
+
+
+def _enforce_limits(a: dict, frame: dict) -> None:
+    drawdown, daily = _setting(a, "maxDrawdownBps"), _setting(a, "dailyLossBps")
+    if not drawdown and not daily:
+        return
+    if a.get("risk") is None:
+        a["risk"] = {"peakValue": a["config"]["initialCash"], "dayStart": None, "dayOpenValue": None,
+                     "killedAt": None, "haltedUntil": None}
+    r = a["risk"]
+    value = _liquidation(a, a, frame)
+    day = math.floor(frame["time"] / DAY) * DAY
+    if r["haltedUntil"] is not None and frame["time"] >= r["haltedUntil"]:
+        _event(a, "risk_resume", frame["time"], actor="auto", limit="daily_loss",
+               reason="New UTC day; daily loss halt lifted")
+        r["haltedUntil"] = None
+    if r["dayStart"] != day:
+        r["dayStart"] = day
+        r["dayOpenValue"] = value
+    r["peakValue"] = max(r["peakValue"], value)
+    if r["killedAt"] is not None or r["haltedUntil"] is not None:
+        return
+    breach: dict[str, Any] | None = None
+    if drawdown and value <= r["peakValue"] * (1 - drawdown / 10000):
+        breach = {"limit": "max_drawdown", "thresholdBps": drawdown, "referenceValue": r["peakValue"],
+                  "reason": "Net liquidation value fell from its observed peak by at least the drawdown limit; "
+                            "no new entries for the rest of the session"}
+    elif daily and value <= r["dayOpenValue"] * (1 - daily / 10000):
+        breach = {"limit": "daily_loss", "thresholdBps": daily, "referenceValue": r["dayOpenValue"],
+                  "resumesAt": day + DAY, "resumeAt": iso(day + DAY),
+                  "reason": "Net liquidation value fell from the UTC day opening value by at least the daily loss "
+                            "limit; no new entries until the next UTC day"}
+    if breach is None:
+        return
+    _event(a, "risk_halt", frame["time"], actor="auto", netLiquidation=value, **breach)
+    _close(a, frame, "auto")
+    if breach["limit"] == "max_drawdown":
+        r["killedAt"] = frame["time"]
+    else:
+        r["haltedUntil"] = breach["resumesAt"]
+
+
 def ingest(a: dict, frame: Any) -> dict:
     if not isinstance(frame, dict) or not finite(frame.get("time")):
         raise ValueError("Invalid frame time")
@@ -279,6 +360,7 @@ def ingest(a: dict, frame: Any) -> dict:
         a["lastValidFrameAt"] = frame["time"]
         return a
     _start(a, frame)
+    _accrue(a, frame)
     config = a["config"]
     if config["mode"] == "live" and a["lastValidFrameAt"] is not None \
             and frame["time"] - a["lastValidFrameAt"] > min(config["horizonMs"], 120000):
@@ -286,6 +368,8 @@ def ingest(a: dict, frame: Any) -> dict:
                reason="No intervening fills simulated; resumed at observed quotes")
     _settle(a, frame)
     stopped = _stop_positions(a, frame)
+    _enforce_limits(a, frame)
+    blocked_by = _halt_reason(a)
     if frame["time"] >= a["endsAt"]:
         _close(a, frame, "auto")
         a["status"] = "completed"
@@ -319,10 +403,12 @@ def ingest(a: dict, frame: Any) -> dict:
             expected = (pred["prediction"] / pred["anchor"]) * (p["sell"] / p["buy"]) \
                 * (1 - p["fee"]) / (1 + p["fee"])
             buy = expected > 1 + config["bufferBps"] / 10000
+            # A halted decision still records what the rule would have done.
+            blocked = {"blockedBy": blocked_by, "wouldBuy": buy} if blocked_by else {}
             _event(a, "decision", frame["time"], actor="auto", asset=asset, forecastId=f["id"],
-                   action="buy" if buy else "cash", expectedNetRatio=expected,
-                   requiredNetRatio=1 + config["bufferBps"] / 10000)
-            if buy:
+                   action="buy" if buy and not blocked_by else "cash", expectedNetRatio=expected,
+                   requiredNetRatio=1 + config["bufferBps"] / 10000, **blocked)
+            if buy and not blocked_by:
                 _fill(a, a, asset, "buy", budget, frame, "auto")
         a["lastDecisionAt"] = frame["time"]
     a["lastFrameAt"] = frame["time"]
@@ -345,6 +431,10 @@ def manual_trade(a: dict, asset: str, side: str, dollars: Any, frame: Any) -> di
         raise ValueError("Paper session has ended")
     if side == "buy" and a["positions"][asset].get("lastStoppedAt") == frame["time"]:
         raise ValueError("Stopped asset cannot reenter in the same frame")
+    if side == "buy" and _halt_reason(a):
+        raise ValueError("Drawdown limit reached: new entries are stopped for this session"
+                         if _halt_reason(a) == "max_drawdown" else
+                         "Daily loss limit reached: new entries resume next UTC day")
     _fill(a, a, asset, side, dollars, frame, "manual")
     _mark(a, frame)
     a["lastFrameAt"] = frame["time"]
@@ -373,6 +463,9 @@ def get_summary(a: dict) -> dict[str, Any]:
     trades = [e for e in a["ledger"] if e["type"] == "trade" and e["actor"] != "benchmark"]
     equity = last["value"] if last else initial
     hold = last["buyHoldValue"] if last else initial
+    # `last?.cashValue ?? initial` and `a.interest ?? 0`
+    cash_benchmark = last.get("cashValue") if last and last.get("cashValue") is not None else initial
+    interest = a.get("interest") if a.get("interest") is not None else 0
     fees = 0
     for t in trades:
         fees = fees + t["fee"]
@@ -384,13 +477,16 @@ def get_summary(a: dict) -> dict[str, Any]:
     return {
         "status": a["status"], "equity": equity, "cash": a["cash"],
         "returnPct": 100 * (equity / initial - 1), "buyHoldEquity": hold,
-        "buyHoldReturnPct": 100 * (hold / initial - 1), "cashBenchmark": initial,
+        "buyHoldReturnPct": 100 * (hold / initial - 1), "cashBenchmark": cash_benchmark,
+        "interestEarned": interest,
         "drawdownPct": dd, "maxDrawdownPct": max_dd, "fees": fees, "tradeCount": len(trades),
         "forecastCount": len(a["forecasts"]), "settledForecasts": len(done),
         "pendingForecasts": sum(1 for f in a["forecasts"] if f["status"] == "pending"),
         "expiredForecasts": sum(1 for f in a["forecasts"] if f["status"] == "expired"),
         "mae": _avg(done, "absoluteError"), "samePriceMae": _avg(done, "baselineAbsoluteError"),
-        "perAsset": per_asset, "valuationAt": last["time"] if last else None,
+        "perAsset": per_asset,
+        "riskHalts": sum(1 for e in a["ledger"] if e["type"] == "risk_halt"), "tradingHalted": _halt_reason(a),
+        "valuationAt": last["time"] if last else None,
         "valuationIsNetLiquidation": True,
     }
 

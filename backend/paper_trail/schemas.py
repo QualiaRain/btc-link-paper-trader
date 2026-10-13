@@ -25,6 +25,14 @@ class ConfigInput(Strict):
     bufferBps: Number | None = None
     allocationFraction: Number | None = Field(None, description="Fraction of available cash per asset, 0 to 0.5.")
     stopLossBps: Number | None = Field(None, description="0 disables the stop loss.")
+    maxDrawdownBps: Number | None = Field(
+        None, description="Account drawdown limit from the observed peak net value, 0-9999 bps; 0 disables it. "
+                          "A breach closes positions and blocks new entries for the rest of the session.")
+    dailyLossBps: Number | None = Field(
+        None, description="Loss limit from the UTC day's first observed net value, 0-9999 bps; 0 disables it. "
+                          "A breach closes positions and blocks new entries until the next UTC day.")
+    cashYieldBps: Number | None = Field(
+        None, description="Annual yield on idle cash, 0-2000 bps, compounded continuously; 0 disables it.")
     feeBps: Number | None = None
     slippageBps: Number | None = None
     durationMs: Number | None = Field(None, description="Live-session duration; replay uses the scored range instead.")
@@ -42,6 +50,9 @@ class Config(BaseModel):
     bufferBps: float
     allocationFraction: float
     stopLossBps: float
+    maxDrawdownBps: float = Field(0, description="Absent in accounts saved before risk limits existed (no limit).")
+    dailyLossBps: float = Field(0, description="Absent in accounts saved before risk limits existed (no limit).")
+    cashYieldBps: float = Field(0, description="Absent in accounts saved before cash yield existed (no yield).")
     feeBps: float
     slippageBps: float
     durationMs: float
@@ -142,6 +153,15 @@ class Baseline(BaseModel):
     positions: Positions
 
 
+class RiskState(BaseModel):
+    """Account-level limit state; present only when a drawdown or daily loss limit is configured."""
+    peakValue: float
+    dayStart: float | None
+    dayOpenValue: float | None
+    killedAt: float | None = Field(description="Set when the drawdown limit halted entries for the session.")
+    haltedUntil: float | None = Field(description="Set while the daily loss limit halts entries (next UTC midnight).")
+
+
 class Account(BaseModel):
     config: Config
     cash: float
@@ -157,6 +177,8 @@ class Account(BaseModel):
     status: Literal["ready", "running", "completed"]
     baseline: Baseline
     sequence: int
+    risk: RiskState | None = Field(None, description="Present only when a risk limit is configured.")
+    interest: float | None = Field(None, description="Cash yield earned so far; present once any interest accrues.")
 
 
 class AssetSummary(BaseModel):
@@ -178,7 +200,8 @@ class Summary(BaseModel):
     returnPct: float
     buyHoldEquity: float
     buyHoldReturnPct: float
-    cashBenchmark: float
+    cashBenchmark: float = Field(description="Initial cash grown at the configured cash yield to the valuation time.")
+    interestEarned: float = Field(0, description="Absent in summaries saved before cash yield existed.")
     drawdownPct: float
     maxDrawdownPct: float
     fees: float
@@ -190,6 +213,9 @@ class Summary(BaseModel):
     mae: float | None
     samePriceMae: float | None
     perAsset: PerAsset
+    riskHalts: int = Field(0, description="Number of `risk_halt` events. Absent in summaries saved before risk limits existed.")
+    tradingHalted: Literal["max_drawdown", "daily_loss"] | None = Field(
+        None, description="The limit currently blocking new entries, or null. Absent in summaries saved before risk limits existed.")
     valuationAt: float | None
     valuationIsNetLiquidation: bool
 

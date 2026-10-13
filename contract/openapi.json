@@ -38,6 +38,18 @@
             "title": "Forecasts",
             "type": "array"
           },
+          "interest": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cash yield earned so far; present once any interest accrues.",
+            "title": "Interest"
+          },
           "lastDecisionAt": {
             "anyOf": [
               {
@@ -80,6 +92,17 @@
           },
           "positions": {
             "$ref": "#/components/schemas/Positions"
+          },
+          "risk": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present only when a risk limit is configured."
           },
           "sequence": {
             "title": "Sequence",
@@ -418,6 +441,18 @@
             "title": "Bufferbps",
             "type": "number"
           },
+          "cashYieldBps": {
+            "default": 0,
+            "description": "Absent in accounts saved before cash yield existed (no yield).",
+            "title": "Cashyieldbps",
+            "type": "number"
+          },
+          "dailyLossBps": {
+            "default": 0,
+            "description": "Absent in accounts saved before risk limits existed (no limit).",
+            "title": "Dailylossbps",
+            "type": "number"
+          },
           "durationMs": {
             "title": "Durationms",
             "type": "number"
@@ -437,6 +472,12 @@
           "lookbackIntervals": {
             "title": "Lookbackintervals",
             "type": "integer"
+          },
+          "maxDrawdownBps": {
+            "default": 0,
+            "description": "Absent in accounts saved before risk limits existed (no limit).",
+            "title": "Maxdrawdownbps",
+            "type": "number"
           },
           "maxOutcomeLatenessMs": {
             "title": "Maxoutcomelatenessms",
@@ -522,6 +563,36 @@
             ],
             "title": "Bufferbps"
           },
+          "cashYieldBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Annual yield on idle cash, 0-2000 bps, compounded continuously; 0 disables it.",
+            "title": "Cashyieldbps"
+          },
+          "dailyLossBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Loss limit from the UTC day's first observed net value, 0-9999 bps; 0 disables it. A breach closes positions and blocks new entries until the next UTC day.",
+            "title": "Dailylossbps"
+          },
           "durationMs": {
             "anyOf": [
               {
@@ -595,6 +666,21 @@
             ],
             "description": "Earlier completed observations used by the trend rule (1-240).",
             "title": "Lookbackintervals"
+          },
+          "maxDrawdownBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Account drawdown limit from the observed peak net value, 0-9999 bps; 0 disables it. A breach closes positions and blocks new entries for the rest of the session.",
+            "title": "Maxdrawdownbps"
           },
           "maxOutcomeLatenessMs": {
             "anyOf": [
@@ -1433,6 +1519,70 @@
         "title": "ReplaySettingsInput",
         "type": "object"
       },
+      "RiskState": {
+        "description": "Account-level limit state; present only when a drawdown or daily loss limit is configured.",
+        "properties": {
+          "dayOpenValue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dayopenvalue"
+          },
+          "dayStart": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daystart"
+          },
+          "haltedUntil": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set while the daily loss limit halts entries (next UTC midnight).",
+            "title": "Halteduntil"
+          },
+          "killedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the drawdown limit halted entries for the session.",
+            "title": "Killedat"
+          },
+          "peakValue": {
+            "title": "Peakvalue",
+            "type": "number"
+          }
+        },
+        "required": [
+          "peakValue",
+          "dayStart",
+          "dayOpenValue",
+          "killedAt",
+          "haltedUntil"
+        ],
+        "title": "RiskState",
+        "type": "object"
+      },
       "RunList": {
         "properties": {
           "runs": {
@@ -1953,6 +2103,7 @@
             "type": "number"
           },
           "cashBenchmark": {
+            "description": "Initial cash grown at the configured cash yield to the valuation time.",
             "title": "Cashbenchmark",
             "type": "number"
           },
@@ -1975,6 +2126,12 @@
           "forecastCount": {
             "title": "Forecastcount",
             "type": "integer"
+          },
+          "interestEarned": {
+            "default": 0,
+            "description": "Absent in summaries saved before cash yield existed.",
+            "title": "Interestearned",
+            "type": "number"
           },
           "mae": {
             "anyOf": [
@@ -2002,6 +2159,12 @@
             "title": "Returnpct",
             "type": "number"
           },
+          "riskHalts": {
+            "default": 0,
+            "description": "Number of `risk_halt` events. Absent in summaries saved before risk limits existed.",
+            "title": "Riskhalts",
+            "type": "integer"
+          },
           "samePriceMae": {
             "anyOf": [
               {
@@ -2024,6 +2187,22 @@
           "tradeCount": {
             "title": "Tradecount",
             "type": "integer"
+          },
+          "tradingHalted": {
+            "anyOf": [
+              {
+                "enum": [
+                  "max_drawdown",
+                  "daily_loss"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The limit currently blocking new entries, or null. Absent in summaries saved before risk limits existed.",
+            "title": "Tradinghalted"
           },
           "valuationAt": {
             "anyOf": [
