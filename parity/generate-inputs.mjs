@@ -277,4 +277,36 @@ write('sample-replay', 'sample-replay', [
     {name: 'yield-above-maximum-throws', config: {cashYieldBps: 2001}, steps: []},
   ]);
 }
+// 12. Settlement with stale quotes over a longer run: a quote that lags its frame holds that asset's forecasts
+// pending while newer forecasts of the other asset settle past them; they settle late or expire once a fresh
+// quote arrives. Some frames are invalid and frames continue after completion. (engine.js settle() skips
+// finished forecasts and stops at the first future target; these accounts must not change because of it.)
+{
+  const n = 240, btc = walk(121, n, 52000, .003, .0001), link = walk(122, n, 16, .006, -.0001), r = rng(123);
+  // Index of the observation each asset's quote shows at frame i (i itself unless the quote is stale).
+  const shown = {BTC: [], LINK: []};
+  for (const asset of ['BTC', 'LINK']) {
+    let staleUntil = -1, from = 0;
+    for (let i = 0; i < n; i++) {
+      if (i > staleUntil && i > 8 && r() < (asset === 'LINK' ? .1 : .04)) { from = i; staleUntil = i + 1 + Math.floor(r() * 8); }
+      shown[asset].push(i <= staleUntil && i > from ? from : i);
+    }
+  }
+  const series = {BTC: btc, LINK: link};
+  const fs = btc.map((_, i) => {
+    const time = T0 + i * M, quotes = {}, history = {};
+    for (const asset of ['BTC', 'LINK']) {
+      const j = shown[asset][i], seen = T0 + j * M;
+      quotes[asset] = quote(series[asset][j], seen);
+      history[asset] = series[asset].slice(Math.max(0, j - 7), j + 1).map((price, k, a) => ({time: seen - (a.length - 1 - k) * M, price}));
+    }
+    return {time, quotes: i % 37 === 20 ? null : quotes, history};
+  });
+  const run = (name, config) => ({name, config: {horizonMs: M, lookbackIntervals: 3, bufferBps: 0, maxQuoteAgeMs: 10 * M, durationMs: 230 * M, ...config}, steps: ingestAll(fs)});
+  write('settle', 'account', [
+    run('stale-quotes-hold-forecasts-then-settle-late', {maxOutcomeLatenessMs: 10 * M}),
+    run('stale-quotes-expire-some-held-forecasts', {maxOutcomeLatenessMs: 150000}),
+    run('stale-quotes-two-minute-horizon-limits-and-yield', {horizonMs: 2 * M, maxOutcomeLatenessMs: 4 * M, stopLossBps: 80, maxDrawdownBps: 300, dailyLossBps: 200, cashYieldBps: 1000}),
+  ]);
+}
 console.log('inputs written to', dir);

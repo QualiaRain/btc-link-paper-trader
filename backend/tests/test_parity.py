@@ -48,7 +48,7 @@ def diff(expected, actual, path="$"):
 
 def test_inputs_and_goldens_are_present():
     assert CASES == ["canonical", "cash-yield", "chronology", "fees-slippage", "missing-quotes", "positions",
-                     "range-replay", "risk-limits", "sample-replay", "settings", "warmup"]
+                     "range-replay", "risk-limits", "sample-replay", "settings", "settle", "warmup"]
 
 
 @pytest.mark.parametrize("name", CASES)
@@ -120,3 +120,14 @@ def test_goldens_exercise_the_cases_they_claim():
                   if "summary" in scenario for per in scenario["summary"]["perAsset"].values()]
     assert any(0 < per["directionFlat"] < per["count"] for per in everything), "a flat outcome under a trend forecast"
 
+    # Settlement with stale quotes: forecasts are held pending behind newer settled ones, then settle late or expire.
+    settle = scenarios("settle")
+    for name, scenario in settle.items():
+        fs = scenario["account"]["forecasts"]
+        assert len(fs) > 200 and scenario["account"]["status"] == "completed", name
+        held_behind = [f for f in fs if any(g["issuedAt"] > f["issuedAt"] and g["processedAt"] < f["processedAt"] for g in fs)]
+        assert len(held_behind) >= 20, name
+        assert any(f["status"] == "settled" and f["latenessMs"] >= 3 * 60000 for f in held_behind) or name.startswith("stale-quotes-expire"), name
+        assert "invalid_frame" in types(scenario)
+    assert settle["stale-quotes-expire-some-held-forecasts"]["summary"]["expiredForecasts"] > 20
+    assert settle["stale-quotes-two-minute-horizon-limits-and-yield"]["summary"]["riskHalts"] == 1

@@ -39,6 +39,16 @@ def finite(x: Any) -> bool:
 
 
 
+class _Account(dict):
+    """An account: a plain dict of JSON items, plus the settle cursor as an attribute.
+
+    The cursor (see `_settle`) lives in a slot, not an item, so it never appears in JSON, records or API
+    responses; deep copies carry it along with the forecasts it describes. Accounts restored from JSON are
+    plain dicts without it and simply scan from the first forecast, like a restored account in engine.js.
+    """
+    __slots__ = ("_settle_from",)
+
+
 def create_account(config: Any = None) -> dict[str, Any]:
     if config is None:
         config = {}
@@ -75,7 +85,7 @@ def create_account(config: Any = None) -> dict[str, Any]:
             raise ValueError(f"{key} must be between 0 and 9999")
     if not finite(c["cashYieldBps"]) or c["cashYieldBps"] < 0 or c["cashYieldBps"] > 2000:
         raise ValueError("cashYieldBps must be between 0 and 2000")
-    return {
+    return _Account({
         "config": c, "cash": c["initialCash"],
         "positions": {"BTC": {"qty": 0, "costBasis": 0}, "LINK": {"qty": 0, "costBasis": 0}},
         "ledger": [], "forecasts": [], "equity": [],
@@ -84,7 +94,7 @@ def create_account(config: Any = None) -> dict[str, Any]:
         "baseline": {"cash": c["initialCash"],
                      "positions": {"BTC": {"qty": 0, "costBasis": 0}, "LINK": {"qty": 0, "costBasis": 0}}},
         "sequence": 0,
-    }
+    })
 
 
 def _event(a: dict, kind: str, time: float, **details: Any) -> None:
@@ -233,7 +243,23 @@ def _prediction(a: dict, asset: str, frame: dict) -> dict | None:
 
 
 def _settle(a: dict, frame: dict) -> None:
-    for f in a["forecasts"]:
+    # engine.js keeps the index of the first forecast that may still be pending per account (a WeakMap).
+    # Settled and expired forecasts never return to pending, so earlier ones need no rescanning. Here the
+    # index is kept on the account object itself (`_Account`), never as an item, so saved records are
+    # unchanged, and it is tied to the forecasts list it was computed for: anything else starts from zero.
+    forecasts = a["forecasts"]
+    hint = getattr(a, "_settle_from", None)
+    start = min(hint[1], len(forecasts)) if hint is not None and hint[0] is forecasts else 0
+    while start < len(forecasts) and forecasts[start]["status"] != "pending":
+        start += 1
+    if isinstance(a, _Account):
+        a._settle_from = (forecasts, start)
+    for i in range(start, len(forecasts)):
+        f = forecasts[i]
+        # Forecasts are issued in time order with one frozen horizon, so targets never decrease:
+        # once a target is in the future, every later one is too.
+        if frame["time"] < f["targetAt"]:
+            break
         q = frame["quotes"][f["asset"]]
         if f["status"] != "pending" or frame["time"] <= f["issuedAt"] or frame["time"] < f["targetAt"] \
                 or q["observedAt"] < f["targetAt"]:
