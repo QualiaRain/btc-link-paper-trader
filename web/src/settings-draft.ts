@@ -5,7 +5,8 @@
 import type {Settings, SettingsInput} from './client.ts';
 
 export const EDITABLE_FIELDS = ['initialCash', 'horizonMs', 'model', 'lookbackIntervals', 'bufferBps', 'allocation',
-  'stopLossBps', 'feeBps', 'slippageBps', 'halfSpreadBps', 'replaySource', 'rangeStart', 'rangeEnd', 'liveHours'] as const;
+  'stopLossBps', 'maxDrawdownBps', 'dailyLossBps', 'feeBps', 'slippageBps', 'halfSpreadBps', 'replaySource', 'rangeStart', 'rangeEnd',
+  'liveHours', 'cashYield'] as const;
 export type EditableField = typeof EDITABLE_FIELDS[number];
 
 /** What a start button asks for. Replay sessions use the form's source; the one-shot replay is sample-only. */
@@ -17,6 +18,8 @@ const MINUTE_FORMAT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 export const percent = (fraction: number): string => String(Number((fraction * 100).toPrecision(12)));
 /** Live duration in hours for display (3,600,000 ms -> "1"). */
 export const hoursOf = (durationMs: number): string => String(Number((durationMs / 3_600_000).toPrecision(12)));
+/** Annual cash yield in percent for display (450 bps -> "4.5"); the form edits percent, the config stores bps. */
+export const yieldPercentOf = (bps: number): string => String(Number((bps / 100).toPrecision(12)));
 
 function finiteNumber(raw: string): number {
   const text = raw.trim();
@@ -55,6 +58,7 @@ export class SettingsDraft {
       else if (field === 'rangeStart') replay.start = raw.trim();
       else if (field === 'rangeEnd') replay.end = raw.trim();
       else if (field === 'liveHours') config['durationMs'] = finiteNumber(raw) * 3_600_000;
+      else if (field === 'cashYield') config['cashYieldBps'] = finiteNumber(raw) * 100;
       else config[field] = finiteNumber(raw);
     }
     if (options.mode) config['mode'] = options.mode;

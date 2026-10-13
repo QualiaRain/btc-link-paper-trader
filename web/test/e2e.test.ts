@@ -29,9 +29,12 @@ describe('TypeScript client against the running Python API', () => {
     assert.equal(settings.config.initialCash, 1000);
     assert.equal(settings.config.horizonMs, 420000);
     assert.equal(settings.config.lookbackIntervals, 7);
-    assert.equal(settings.config.feeBps, 10);
+    assert.equal(settings.config.feeBps, 2);
     assert.equal(settings.config.slippageBps, 2);
-    assert.equal(settings.replay.halfSpreadBps, 2);
+    assert.equal(settings.config.maxDrawdownBps, 0, 'risk limits are off by default');
+    assert.equal(settings.config.dailyLossBps, 0);
+    assert.equal(settings.config.cashYieldBps, 0, 'idle cash earns nothing by default');
+    assert.equal(settings.replay.halfSpreadBps, 3);
     assert.deepEqual(horizonsMs, [60000, 300000, 420000, 900000, 3600000, 25200000, 86400000]);
   });
 

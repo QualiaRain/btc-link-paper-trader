@@ -124,7 +124,8 @@ describe('date-range replays through candle jobs (fake exchange, root replay.js 
 
 describe('live paper sessions (fake exchange)', () => {
   it('starts, ticks (frames and version increase), keeps state on a 502, trades manually, and saves a verifying record', async () => {
-    const settings = {config: {mode: 'live' as const, durationMs: 7_200_000}};
+    // Automatic entries use at most half the cash, so the manual buy below always has cash to spend.
+    const settings = {config: {mode: 'live' as const, durationMs: 7_200_000, allocationFraction: 0.25}};
     let state = await client.createSession({settings, name: 'live e2e'});
     assert.equal(state.kind, 'live');
     assert.equal(state.status, 'active');

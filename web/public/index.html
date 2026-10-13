@@ -87,11 +87,14 @@
         <label>Entry buffer (bps)<input id="bufferBps" type="number" min="0" step="any"></label>
         <label>Allocation per asset (%)<input id="allocation" type="number" min="0" max="50" step="any"></label>
         <label>Stop loss (bps, 0 = off)<input id="stopLossBps" type="number" min="0" step="any"></label>
+        <label>Max drawdown from peak (bps, 0 = off)<input id="maxDrawdownBps" type="number" min="0" max="9999" step="any"></label>
+        <label>Daily loss limit per UTC day (bps, 0 = off)<input id="dailyLossBps" type="number" min="0" max="9999" step="any"></label>
         <label>Fee per fill (bps)<input id="feeBps" type="number" min="0" step="any"></label>
         <label>Slippage per fill (bps)<input id="slippageBps" type="number" min="0" step="any"></label>
         <label>Assumed half-spread (bps)<input id="halfSpreadBps" type="number" min="0" step="any"></label>
         <label>Replay source<select id="replaySource"><option value="sample">Included sample</option><option value="range">UTC date range (fetched by the server)</option></select></label>
         <label>Live duration (hours)<input id="liveHours" type="number" min="0.01" step="any"></label>
+        <label>Idle cash yield (% per year, 0 = off)<input id="cashYield" type="number" min="0" max="20" step="any"></label>
         <div id="range-fields" class="wide range-fields" hidden>
           <label>Start (UTC minute)<input id="rangeStart" type="datetime-local" step="60"></label>
           <label>End (UTC minute)<input id="rangeEnd" type="datetime-local" step="60"></label>

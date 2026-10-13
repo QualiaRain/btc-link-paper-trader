@@ -50,7 +50,7 @@ export class HistoryView {
     const card = el('article', 'panel history-card');
     card.dataset['runId'] = run.id;
     card.append(el('h3', '', run.name || 'Unnamed run'));
-    card.append(el('p', 'muted small', `${run.status === 'completed' ? 'Complete' : 'Partial snapshot'} · ${c['mode']}${run.manualTradeCount > 0 ? ' · manual changes' : ''} · saved ${utcIso(run.updatedAt)}`));
+    card.append(el('p', 'muted small', `${run.status === 'completed' ? 'Complete' : 'Partial snapshot'} · ${c['mode']}${run.manualTradeCount > 0 ? ' · manual changes' : ''}${s.riskHalts ? ` · ${s.riskHalts} risk halt${s.riskHalts === 1 ? '' : 's'}` : ''} · saved ${utcIso(run.updatedAt)}`));
     const metrics = el('div', 'history-metrics');
     for (const [key, label, value, raw] of [['equity', 'Net value', money(s.equity), s.equity], ['return', 'Return', `${s.returnPct.toFixed(2)}%`, s.returnPct],
       ['buyhold', 'Buy & hold', money(s.buyHoldEquity), s.buyHoldEquity], ['drawdown', 'Drawdown', `${s.maxDrawdownPct.toFixed(2)}%`, s.maxDrawdownPct]] as const) {
@@ -62,7 +62,7 @@ export class HistoryView {
       metrics.append(item);
     }
     card.append(metrics);
-    card.append(el('p', 'muted small', `${money(c['initialCash'], 0)} cash · ${c['model']} · ${c['horizonMs'] / 60000} min horizon · ${c['lookbackIntervals']} lookback · ${Number((c['allocationFraction'] * 100).toPrecision(12))}% per asset · buffer ${c['bufferBps']} bps · stop ${c['stopLossBps'] || 'off'}${c['stopLossBps'] ? ' bps' : ''} · fee/slippage ${c['feeBps']}/${c['slippageBps']} bps`));
+    card.append(el('p', 'muted small', `${money(c['initialCash'], 0)} cash · ${c['model']} · ${c['horizonMs'] / 60000} min horizon · ${c['lookbackIntervals']} lookback · ${Number((c['allocationFraction'] * 100).toPrecision(12))}% per asset · buffer ${c['bufferBps']} bps · stop ${c['stopLossBps'] || 'off'}${c['stopLossBps'] ? ' bps' : ''} · drawdown limit ${c['maxDrawdownBps'] || 'off'}${c['maxDrawdownBps'] ? ' bps' : ''} · daily loss ${c['dailyLossBps'] || 'off'}${c['dailyLossBps'] ? ' bps' : ''} · cash yield ${(c['cashYieldBps'] ?? 0) / 100}%/yr · fee/slippage ${c['feeBps']}/${c['slippageBps']} bps`));
     card.append(el('p', 'muted small', `${utc(run.scoreStart ?? s.valuationAt)} → ${utc(run.scoreEnd)} · ${s.settledForecasts} scored, ${s.expiredForecasts} missed · ${run.source || 'Source in export'}`));
     const actions = el('div', 'actions history-actions');
     const button = (label: string, action: string, handler: () => Promise<void>): void => {

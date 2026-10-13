@@ -324,7 +324,8 @@ describe('stepwise session panel (real Chromium, real Python API, JS oracle)', (
     oracle.apply({kind: 'order', asset: 'BTC', side: 'buy', dollars: 100});
     await press(page, '#s-next-decision', '/advance');
     oracle.apply({kind: 'decision'});
-    await press(page, '#s-sell-LINK', '/orders'); // rejected: nothing changes
+    await press(page, '#s-sell-LINK', '/orders'); // rejected unless the decision bought LINK; the oracle mirrors either outcome
+    oracle.apply({kind: 'order', asset: 'LINK', side: 'sell'});
     await press(page, '#s-next-frame', '/advance');
     oracle.apply({kind: 'frames', count: 3});
     await press(page, '#s-next-frame', '/advance');
@@ -365,7 +366,10 @@ describe('stepwise session panel (real Chromium, real Python API, JS oracle)', (
     near(record.summary.buyHoldEquity, want.buyHold, 'buy-and-hold');
     near(record.summary.fees, want.fees, 'fees');
     assert.equal(record.summary.tradeCount, want.tradeCount);
-    assert.equal(record.manualTradeCount, 1);
+    // The BTC buy, plus the LINK sell when the decision before it had bought LINK.
+    const manual = oracle.ledger().filter((e: any) => e.type === 'trade' && e.actor === 'manual').length;
+    assert.ok(manual === 1 || manual === 2);
+    assert.equal(record.manualTradeCount, manual);
 
     // The run is in history: through the API and in the page's own list.
     const state = await client.getSession(finished.id);

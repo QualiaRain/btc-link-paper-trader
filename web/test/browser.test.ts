@@ -114,6 +114,36 @@ describe('settings survive the UI round trip (real Chromium, real Python API)', 
     } finally { await page.close(); }
   });
 
+  it('risk limits and the cash yield (shown in % per year) travel through the form and show in history and snapshots', async t => {
+    if (skipUnlessBrowser(t)) return;
+    const page = await openPage();
+    try {
+      await page.setInputFiles('#settings-file', settingsFile({horizonMs: 300000, bufferBps: 0, maxDrawdownBps: 40, cashYieldBps: 450}));
+      await waitNotice(page, 'Settings validated');
+      assert.equal(await page.inputValue('#maxDrawdownBps'), '40');
+      assert.equal(await page.inputValue('#dailyLossBps'), '0');
+      assert.equal(await page.inputValue('#cashYield'), '4.5', 'bps are shown as percent per year');
+      await page.fill('#dailyLossBps', '25');
+      await page.fill('#cashYield', '20');
+      const record = await runAndExport(page);
+      const c = record.config;
+      assert.deepEqual([c.maxDrawdownBps, c.dailyLossBps, c.cashYieldBps], [40, 25, 2000]);
+      assert.ok(record.summary.riskHalts > 0 && record.summary.interestEarned > 0 && record.summary.cashBenchmark > 1000);
+      const card = page.locator(`#history [data-run-id="${record.id}"]`);
+      await card.waitFor({state: 'attached'});
+      assert.match(await card.textContent() ?? '', new RegExp(`${record.summary.riskHalts} risk halts?[\\s\\S]*drawdown limit 40 bps · daily loss 25 bps · cash yield 20%/yr`));
+      await page.click('#view-history');
+      await card.locator('[data-action=open]').click();
+      await page.locator('#snapshot-banner').waitFor({state: 'visible'});
+      assert.match(await page.locator('#cash-legend').innerText(), /\$1,000 cash at 20%\/yr/);
+      if (record.summary.tradingHalted)
+        assert.match(await page.locator('#run-detail').innerText(), /entries halted by (drawdown|daily loss) limit$/);
+      await page.selectOption('#ledger-filter', 'decisions');
+      const blocked = record.account.ledger.filter((e: any) => e.type === 'decision' && e.blockedBy).length;
+      if (blocked) assert.ok(await page.locator('#ledger tr[data-type=decision]', {hasText: 'blocked by'}).count() > 0);
+    } finally { await page.close(); }
+  });
+
   it('applies date-range settings and sends them to the candle job; the one-shot replay stays a sample', async t => {
     if (skipUnlessBrowser(t)) return;
     const page = await openPage();

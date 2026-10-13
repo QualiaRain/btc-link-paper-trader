@@ -2,7 +2,7 @@
 // access to the session mutators, so a snapshot can never step, order or save.
 import type {PaperTrailClient, RunRecord} from './client.ts';
 import {utc, utcIso} from './format.ts';
-import type {RunPanels} from './run-panels.ts';
+import {haltNote, type RunPanels} from './run-panels.ts';
 import type {SessionView} from './session-view.ts';
 import {currentRun} from './workspace.ts';
 
@@ -43,7 +43,7 @@ export class SnapshotView {
     this.#deps.panels.show({
       name: record.name,
       badge: `${mode} · read-only snapshot · ${record.status === 'completed' ? 'complete' : 'partial'}`,
-      detail: `${record.summary.tradeCount} fills · ${record.account.config.model} · ${record.account.config.horizonMs / 60000} min horizon · ${utc(record.account.startedAt)} → ${utc(record.account.endsAt)}`,
+      detail: `${record.summary.tradeCount} fills · ${record.account.config.model} · ${record.account.config.horizonMs / 60000} min horizon · ${utc(record.account.startedAt)} → ${utc(record.account.endsAt)}${haltNote(record.summary)}`,
       account: record.account, summary: record.summary, quotes,
     });
     if (!this.#deps.sessions.session) currentRun.write({runId: record.id, name: record.name, readOnly: true});

@@ -9,7 +9,7 @@
 import {ApiError, PaperTrailClient, type Account, type Advance, type CandleJob, type LedgerEvent, type Order, type SessionState, type SessionStep, type SettingsInput} from './client.ts';
 import type {RequestOptions} from './settings-draft.ts';
 import {el, money, utc} from './format.ts';
-import type {RunPanels} from './run-panels.ts';
+import {haltNote, type RunPanels} from './run-panels.ts';
 import {currentRun, type Workspace} from './workspace.ts';
 
 const ASSETS = ['BTC', 'LINK'] as const;
@@ -150,7 +150,7 @@ export class SessionView {
     this.#deps.panels.show({
       name: this.#runName || `Session ${s.runId.slice(0, 8)}`,
       badge: `${live ? 'Live paper' : s.kind === 'sample' ? 'Sample replay' : 'UTC replay'} · ${mode}`,
-      detail: `${s.summary.tradeCount} fills · ${s.config.model} · ${s.config.horizonMs / 60000} min horizon · ${utc(s.scoreStart)} → ${utc(s.scoreEnd)} · ${live ? 'latest quotes' : 'clock'} ${utc(s.currentFrame.time)}`,
+      detail: `${s.summary.tradeCount} fills · ${s.config.model} · ${s.config.horizonMs / 60000} min horizon · ${utc(s.scoreStart)} → ${utc(s.scoreEnd)} · ${live ? 'latest quotes' : 'clock'} ${utc(s.currentFrame.time)}${haltNote(s.summary)}`,
       account, summary: s.summary, quotes: s.currentFrame.quotes,
     });
   }

@@ -161,8 +161,8 @@ describe('stepwise sessions through the TypeScript client (real API, JS oracle)'
   });
 
   it('saves a snapshot under the session run id, exports results and settings, and lists the run', async () => {
-    const oracle = await createOracle();
     const request = {config: {}, replay: {source: 'sample' as const, halfSpreadBps: 2}};
+    const oracle = await createOracle(request);
     let state = await client.createSession({settings: request, name: 'e2e snapshot'});
     const {id, runId} = state;
     state = (await both(id, state, oracle, {kind: 'frames', count: 2})).state;

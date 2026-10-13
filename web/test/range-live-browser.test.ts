@@ -28,7 +28,8 @@ after(async () => { await browser?.close(); api?.stop(); await fake?.stop(); });
 const RANGE = {start: '2024-03-09T08:00', end: '2024-03-09T15:00'};
 const SHORT = {start: '2024-03-09T12:00', end: '2024-03-09T13:00'};
 const COSTS = {bufferBps: 0, horizonMs: 300000, feeBps: 1, slippageBps: 0};
-const rangeRequest = (range: {start: string; end: string}) => ({config: COSTS, replay: {source: 'range' as const, ...range, halfSpreadBps: 2}});
+// The page leaves the half-spread at its default, so the oracle does too (both read configuration.js's default).
+const rangeRequest = (range: {start: string; end: string}) => ({config: COSTS, replay: {source: 'range' as const, ...range}});
 
 async function scenario(t: TestContext, query: string, body: (ctx: {page: Page; seen: Seen}) => Promise<void>): Promise<void> {
   if (!browser) { t.skip(`no Chromium available: ${problem}`); return; }
@@ -233,6 +234,7 @@ describe('date-range replay through the page (fake exchange)', () => {
 describe('live paper sessions through the page (fake exchange)', () => {
   it('starts, ticks now three times, survives a 502 unchanged, trades manually, and exports a verifying record', t => scenario(t, '', async ({page}) => {
     await page.fill('#name', 'live browser run');
+    await page.fill('#allocation', '25'); // automatic entries leave half the cash, so the manual buy below always has cash
     await page.click('#s-start-live');
     await waitActive(page);
     await idle(page);

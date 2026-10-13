@@ -4,7 +4,7 @@ import {RunPanels} from './run-panels.ts';
 import {SessionView} from './session-view.ts';
 import {SnapshotView} from './snapshot-view.ts';
 import {Workspace, currentRun as pointer} from './workspace.ts';
-import {EDITABLE_FIELDS, SettingsDraft, hoursOf, percent, type EditableField, type RequestOptions} from './settings-draft.ts';
+import {EDITABLE_FIELDS, SettingsDraft, hoursOf, percent, yieldPercentOf, type EditableField, type RequestOptions} from './settings-draft.ts';
 
 const query = new URLSearchParams(location.search);
 const client = new PaperTrailClient({baseUrl: query.get('api') ?? ''});
@@ -13,7 +13,7 @@ const liveTickMs = Math.max(50, Number(query.get('liveTickMs')) || 10_000);
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const money = (n: number): string => n.toLocaleString('en-US', {style: 'currency', currency: 'USD'});
 const pct = (n: number): string => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)}%`;
-const FIELDS = ['initialCash', 'lookbackIntervals', 'bufferBps', 'stopLossBps', 'feeBps', 'slippageBps'] as const;
+const FIELDS = ['initialCash', 'lookbackIntervals', 'bufferBps', 'stopLossBps', 'maxDrawdownBps', 'dailyLossBps', 'feeBps', 'slippageBps'] as const;
 let currentRun: string | null = null;
 let draft: SettingsDraft;
 type View = 'config' | 'run' | 'history';
@@ -49,7 +49,7 @@ function download(payload: unknown, name: string): void {
 function applySettings(settings: Settings): void {
   draft.replaceBase(settings);
   const c = settings.config;
-  for (const key of FIELDS) $<HTMLInputElement>(key).value = String(c[key]);
+  for (const key of FIELDS) $<HTMLInputElement>(key).value = String(c[key] ?? 0);
   $<HTMLSelectElement>('horizonMs').value = String(c.horizonMs);
   $<HTMLSelectElement>('model').value = c.model;
   $<HTMLInputElement>('allocation').value = percent(c.allocationFraction);
@@ -58,6 +58,7 @@ function applySettings(settings: Settings): void {
   $<HTMLInputElement>('rangeStart').value = settings.replay.start;
   $<HTMLInputElement>('rangeEnd').value = settings.replay.end;
   $<HTMLInputElement>('liveHours').value = hoursOf(c.durationMs);
+  $<HTMLInputElement>('cashYield').value = yieldPercentOf(c.cashYieldBps ?? 0);
   rangeVisibility();
 }
 

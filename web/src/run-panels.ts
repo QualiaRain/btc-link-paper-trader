@@ -65,7 +65,8 @@ export class RunPanels {
     ];
     for (const [id, text, raw] of metrics) { $(id).textContent = text; $(id).dataset['raw'] = String(raw); }
     $('m-return').className = summary.returnPct >= 0 ? 'positive' : 'negative';
-    $('cash-legend').textContent = `${money(initial, 0)} cash`;
+    const yieldBps = account.config.cashYieldBps ?? 0;  // absent in accounts saved before cash yield existed
+    $('cash-legend').textContent = `${money(initial, 0)} cash${yieldBps ? ` at ${yieldBps / 100}%/yr` : ''}`;
     renderEquityChart($('chart'), account.equity, initial);
     for (const asset of ASSETS) this.#renderAsset(asset, data);
     this.#renderLedger(account);
@@ -140,6 +141,12 @@ export class RunPanels {
     } else if (e.type === 'decision') {
       title = e['action'] === 'buy' ? 'Buy signal' : 'Keep cash';
       detail = `Expected net ${((Number(e['expectedNetRatio']) - 1) * 100).toFixed(3)}% · hurdle ${((Number(e['requiredNetRatio']) - 1) * 100).toFixed(2)}%`;
+      if (e['blockedBy']) detail += ` · blocked by ${limitName(e['blockedBy'])} limit${e['wouldBuy'] ? '; rule would buy' : ''}`;
+    } else if (e.type === 'risk_halt') {
+      const drawdown = e['limit'] === 'max_drawdown';
+      title = drawdown ? 'Drawdown halt' : 'Daily loss halt';
+      detail = `Net ${money(Number(e['netLiquidation']))} vs ${money(Number(e['referenceValue']))} ${drawdown ? 'peak' : 'day open'} · limit ${e['thresholdBps']} bps · `
+        + (e['resumesAt'] != null ? `entries resume ${utc(Number(e['resumesAt']))}` : 'no new entries this session');
     } else if (e.type === 'forecast_settled') {
       title = 'Forecast scored';
       detail = `${e['forecastId']} · ${Math.round(Number(e['latenessMs']) / 1000)}s late`;
@@ -152,6 +159,14 @@ export class RunPanels {
       el('td', `numeric ${delta == null ? '' : delta > 0 ? 'positive' : delta < 0 ? 'negative' : ''}`, delta == null ? '—' : signed(delta)));
     return row;
   }
+}
+
+/** How the summary's `tradingHalted` reads in the run detail line ('' when entries are allowed). */
+export const haltNote = (summary: Summary): string =>
+  summary.tradingHalted ? ` · entries halted by ${limitName(summary.tradingHalted)} limit` : '';
+
+function limitName(limit: unknown): string {
+  return limit === 'max_drawdown' ? 'drawdown' : 'daily loss';
 }
 
 export const describeUtcRange = (account: Account): string => `${utc(account.startedAt)} → ${utc(account.endsAt)}`;
