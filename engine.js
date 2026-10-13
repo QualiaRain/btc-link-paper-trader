@@ -266,6 +266,17 @@ export function manualTrade(a,asset,side,dollars,frame) {
   a.lastFrameAt=frame.time;a.lastValidFrameAt=frame.time;return a;
 }
 
+// Which settled forecast landed nearer the outcome: the model or the same-price baseline.
+// Equal errors (including a zero-drift forecast) count as ties.
+function closerCounts(fs) {
+  let modelCloser=0,samePriceCloser=0,ties=0;
+  for (const f of fs) {
+    const d=f.baselineAbsoluteError-f.absoluteError;
+    if (Math.abs(d)<=1e-12*Math.max(1,f.actual)) ties++; else if (d>0) modelCloser++; else samePriceCloser++;
+  }
+  return {modelCloser,samePriceCloser,ties};
+}
+
 export function getSummary(a) {
   const last=a.equity.at(-1),initial=a.config.initialCash;
   let peak=initial,maxDD=0,dd=0;
@@ -281,7 +292,7 @@ export function getSummary(a) {
     expiredForecasts:a.forecasts.filter(f=>f.status==='expired').length,
     mae:avg(done,'absoluteError'),samePriceMae:avg(done,'baselineAbsoluteError'),
     perAsset:Object.fromEntries(ASSETS.map(s=>{const fs=done.filter(f=>f.asset===s);return [s,{count:fs.length,
-      mae:avg(fs,'absoluteError'),samePriceMae:avg(fs,'baselineAbsoluteError'),qty:a.positions[s].qty}];})),
+      mae:avg(fs,'absoluteError'),samePriceMae:avg(fs,'baselineAbsoluteError'),...closerCounts(fs),qty:a.positions[s].qty}];})),
     riskHalts:a.ledger.filter(e=>e.type==='risk_halt').length,tradingHalted:haltReason(a),
     valuationAt:last?.time??null,valuationIsNetLiquidation:true};
 }
