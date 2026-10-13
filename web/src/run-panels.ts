@@ -1,9 +1,10 @@
-// The Run view's read-only panels: header metrics, equity chart, per-asset positions and forecasts,
-// and the activity ledger with its filter. They render whatever account they are given (a live
+// The Run view's read-only panels: header metrics, equity chart, forecast report card, per-asset positions and
+// forecasts, and the activity ledger with its filter. They render whatever account they are given (a live
 // session's account or a saved record's), so a snapshot is shown by exactly the same code.
 import type {Account, FrameView, LedgerEvent, Summary} from './client.ts';
 import {renderEquityChart} from './chart.ts';
 import {digitsFor, el, money, pct, qtyDigits, shortTime, signed, utc} from './format.ts';
+import {MIN_FORECASTS, gradeAsset, type Grade} from './report-card.ts';
 
 const ASSETS = ['BTC', 'LINK'] as const;
 type Asset = typeof ASSETS[number];
@@ -68,6 +69,7 @@ export class RunPanels {
     const yieldBps = account.config.cashYieldBps ?? 0;  // absent in accounts saved before cash yield existed
     $('cash-legend').textContent = `${money(initial, 0)} cash${yieldBps ? ` at ${yieldBps / 100}%/yr` : ''}`;
     renderEquityChart($('chart'), account.equity, initial);
+    $('report-grid').replaceChildren(...ASSETS.map(asset => reportRow(asset, summary.perAsset[asset], account.config.model)));
     for (const asset of ASSETS) this.#renderAsset(asset, data);
     this.#renderLedger(account);
   }
@@ -159,6 +161,56 @@ export class RunPanels {
       el('td', `numeric ${delta == null ? '' : delta > 0 ? 'positive' : delta < 0 ? 'negative' : ''}`, delta == null ? '—' : signed(delta)));
     return row;
   }
+}
+
+/** app.js: how likely coin flips are to land this far from 50%. */
+export const chance = (p: number): string => (p < 0.001 ? 'less than 0.1%' : `${(100 * p).toFixed(p < 0.01 ? 1 : 0)}%`);
+
+type AssetStats = Summary['perAsset']['BTC'];
+
+/** The report card row for one asset, with the wording of app.js reportCardPanel(). Grades and numbers are exposed
+ *  as data attributes so tests can compare them with the root report-card.js. */
+export function reportRow(asset: Asset, stats: AssetStats, model: string): HTMLElement {
+  const g = gradeAsset(stats, model);
+  // Summaries saved before the report card existed have no direction counts; they are not graded from zeros.
+  const unavailable = stats.directionHits == null && g.verdict !== 'baseline' && g.verdict !== 'none';
+  const row = el('div', 'report-row');
+  row.id = `report-${asset}`;
+  const data: Record<string, string> = {verdict: unavailable ? 'unavailable' : g.verdict, count: String(g.count), hits: String(g.hits),
+    misses: String(g.misses), flat: String(g.flat), decided: String(g.decided), hitRatePct: String(g.hitRatePct),
+    detectablePts: String(g.detectablePts), maeChangePct: String(g.maeChangePct), pValue: String(g.pValue)};
+  Object.assign(row.dataset, data);
+  const head = el('div', 'report-head');
+  const tone = unavailable ? '' : g.verdict === 'better' ? ' good' : g.verdict === 'worse' ? ' bad' : '';
+  head.append(el('strong', '', asset), el('span', `report-verdict${tone}`, unavailable ? 'Not graded' : g.label));
+  row.append(head, ...reportLines(asset, g, stats, unavailable).map(parts => {
+    const line = el('p', 'report-line');
+    line.append(...parts.map(part => (typeof part === 'string' ? document.createTextNode(part) : el('strong', '', part.strong))));
+    return line;
+  }));
+  return row;
+}
+
+type Part = string | {strong: string};
+
+function reportLines(asset: Asset, g: Grade, stats: AssetStats, unavailable: boolean): Part[][] {
+  if (g.verdict === 'baseline') return [['This run uses the same-price rule, which never predicts a direction. Choose the trend rule in Config to grade it.']];
+  if (g.verdict === 'none') return [['Forecasts are graded once their target time arrives.']];
+  if (unavailable) return [['This run was saved before the report card existed, so its summary has no direction counts to grade.']];
+  const lines: Part[][] = [];
+  lines.push(g.decided
+    ? ['Called the direction right in ', {strong: `${g.hits} of ${g.decided}`}, ` forecasts (${(g.hitRatePct as number).toFixed(0)}%)${g.flat ? ` · ${g.flat} with no move skipped` : ''}.`]
+    : [`No forecast predicted a move that was then observed${g.flat ? ` (${g.flat} skipped)` : ''}.`]);
+  if (g.verdict === 'too_few') lines.push([`Needs at least ${MIN_FORECASTS} forecasts with a predicted and an observed move; has ${g.decided}.`]);
+  else {
+    lines.push([`A rule with no skill scores 50%. Coin flips would land at least this far from 50% ${chance(g.pValue as number)} of the time.`]);
+    lines.push([`This many forecasts can only spot an edge of more than about ${(g.detectablePts as number).toFixed(0)} points either side of 50%.`]);
+  }
+  if (g.maeChangePct != null) {
+    const digits = digitsFor(asset);
+    lines.push([`For reference, average miss ${money(stats.mae as number, digits)} vs ${money(stats.samePriceMae as number, digits)} when guessing “no change”.`]);
+  }
+  return lines;
 }
 
 /** How the summary's `tradingHalted` reads in the run detail line ('' when entries are allowed). */

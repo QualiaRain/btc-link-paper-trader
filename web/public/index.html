@@ -141,6 +141,12 @@
         <div class="legend" aria-hidden="true"><span class="key strategy">Strategy (net of exit costs)</span><span class="key buyhold">Buy &amp; hold</span><span class="key cash" id="cash-legend">Cash</span></div>
         <div id="chart"></div>
       </section>
+      <section class="panel report-card" id="report-card" aria-labelledby="report-card-title">
+        <h2 id="report-card-title">Forecast report card</h2>
+        <p class="muted small">Did the rule call the price direction better than a coin flip?</p>
+        <div class="report-grid" id="report-grid"></div>
+        <p class="muted small" id="report-note">Direction only: calling it right doesn’t mean the moves were big enough to beat costs. If you’ve tried several settings on this same date range, these odds no longer apply; confirm on a fresh range.</p>
+      </section>
       <section class="panel" aria-labelledby="assets-title">
         <h2 id="assets-title">Positions &amp; forecasts</h2>
         <div id="assets" class="asset-cards"></div>

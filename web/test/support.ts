@@ -4,7 +4,7 @@ import {existsSync} from 'node:fs';
 import {chromium, type Browser, type Page} from 'playwright-core';
 import {PaperTrailClient} from '../src/client.ts';
 import {assertParity, type Observed, type Oracle} from './oracle.ts';
-import type {RunningApi} from './server.ts';
+import {repo, type RunningApi} from './server.ts';
 
 export async function launch(): Promise<{browser?: Browser; problem: string}> {
   const executablePath = process.env['CHROMIUM_PATH'] ?? (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
@@ -119,7 +119,7 @@ export async function assertMatchesOracle(page: Page, client: PaperTrailClient, 
 
 // ---- Run view panels -------------------------------------------------------------------------------
 export interface PanelsTruth {
-  account: {positions: Record<'BTC' | 'LINK', {qty: number; costBasis: number}>; forecasts: any[]; equity: any[]; ledger: any[]; config: {slippageBps: number; feeBps: number}};
+  account: {positions: Record<'BTC' | 'LINK', {qty: number; costBasis: number}>; forecasts: any[]; equity: any[]; ledger: any[]; config: {slippageBps: number; feeBps: number; model: string}};
   summary: any;
   quotes: Record<'BTC' | 'LINK', {bid: number}> | null;
 }
@@ -139,7 +139,14 @@ export const readPanels = (page: Page) => page.evaluate(() => {
       mae: raw('mae'), same: raw('same')};
   }
   const ledger = d('ledger');
+  const report: Record<string, {data: Record<string, string>; verdict: string; tone: string; lines: string[]}> = {};
+  for (const a of ['BTC', 'LINK']) {
+    const row = d(`report-${a}`), pill = row.querySelector('.report-verdict')!;
+    report[a] = {data: {...row.dataset} as Record<string, string>, verdict: pill.textContent!, tone: pill.className,
+      lines: Array.from(row.querySelectorAll('.report-line')).map(line => line.textContent!)};
+  }
   return {
+    report, reportVisible: !d('report-card').hidden && d('report-card').offsetParent !== null,
     chart: {label: svg.getAttribute('aria-label')!, count: Number(svg.dataset['points']), lo: Number(svg.dataset['yLo']), hi: Number(svg.dataset['yHi']),
       top: Number(svg.dataset['plotTop']), bottom: Number(svg.dataset['plotBottom']), strategy: chartNode('chart-strategy'), buyHold: chartNode('chart-buyhold'), cash: chartNode('chart-cash')},
     assets,
@@ -203,12 +210,58 @@ export async function assertRunPanels(page: Page, truth: PanelsTruth, label: str
     }
   }
   if (truth.quotes) near(truth.summary.cash + netLiqTotal, truth.summary.equity, `${label}: cash + net liquidation = net value`, 1e-6);
+  await assertReportCard(ui, truth, label);
   // ledger counts (benchmark rows are never listed)
   const rows = truth.account.ledger.filter(e => e.actor !== 'benchmark');
   assert.equal(ui.ledger.all, rows.length, `${label}: activity events`);
   assert.equal(ui.ledger.trades, rows.filter(e => e.type === 'trade').length, `${label}: trades`);
   assert.equal(ui.ledger.decisions, rows.filter(e => e.type === 'decision').length, `${label}: decisions`);
   return ui;
+}
+
+// ---- Forecast report card ------------------------------------------------------------------------------
+type RootReportCard = {MIN_FORECASTS: number; gradeAsset(stats: any, model: string): any};
+let rootCard: Promise<RootReportCard> | undefined;
+const chance = (p: number): string => (p < 0.001 ? 'less than 0.1%' : `${(100 * p).toFixed(p < 0.01 ? 1 : 0)}%`);
+
+/** The lines app.js reportCardPanel() writes for one asset (markup removed), from the ROOT report-card.js grade. */
+function appReportLines(g: any, m: any, digits: number, min: number): string[] {
+  const lines: string[] = [];
+  if (g.verdict === 'baseline') lines.push('This run uses the same-price rule, which never predicts a direction. Choose the trend rule in Config to grade it.');
+  else if (g.verdict === 'none') lines.push('Forecasts are graded once their target time arrives.');
+  else {
+    lines.push(g.decided ? `Called the direction right in ${g.hits} of ${g.decided} forecasts (${g.hitRatePct.toFixed(0)}%)${g.flat ? ` · ${g.flat} with no move skipped` : ''}.` : `No forecast predicted a move that was then observed${g.flat ? ` (${g.flat} skipped)` : ''}.`);
+    if (g.verdict === 'too_few') lines.push(`Needs at least ${min} forecasts with a predicted and an observed move; has ${g.decided}.`);
+    else {
+      lines.push(`A rule with no skill scores 50%. Coin flips would land at least this far from 50% ${chance(g.pValue)} of the time.`);
+      lines.push(`This many forecasts can only spot an edge of more than about ${g.detectablePts.toFixed(0)} points either side of 50%.`);
+    }
+    if (g.maeChangePct != null) lines.push(`For reference, average miss ${money(m.mae, digits)} vs ${money(m.samePriceMae, digits)} when guessing “no change”.`);
+  }
+  return lines;
+}
+const money = (n: number, digits: number) => n.toLocaleString('en-US', {style: 'currency', currency: 'USD', minimumFractionDigits: digits, maximumFractionDigits: digits});
+
+/** The report card shows the ROOT report-card.js grade of the truth's summary, worded like app.js. A summary saved
+ *  before the counts existed is shown as not graded rather than graded from zeros. */
+export async function assertReportCard(ui: Awaited<ReturnType<typeof readPanels>>, truth: PanelsTruth, label: string): Promise<void> {
+  const js = await (rootCard ??= import(repo('report-card.js')) as Promise<RootReportCard>);
+  assert.ok(ui.reportVisible, `${label}: report card visible`);
+  for (const asset of ['BTC', 'LINK'] as const) {
+    const per = truth.summary.perAsset[asset], g = js.gradeAsset(per, truth.account.config.model), shown = ui.report[asset]!;
+    for (const key of ['count', 'hits', 'misses', 'flat', 'decided', 'hitRatePct', 'detectablePts', 'maeChangePct', 'pValue'])
+      assert.equal(shown.data[key], String(g[key]), `${label}: ${asset} report ${key}`);
+    if (per.directionHits === undefined && g.verdict !== 'baseline' && g.verdict !== 'none') {
+      assert.equal(shown.data['verdict'], 'unavailable', `${label}: ${asset} saved before the report card`);
+      assert.equal(shown.verdict, 'Not graded');
+      assert.deepEqual(shown.lines, ['This run was saved before the report card existed, so its summary has no direction counts to grade.']);
+      continue;
+    }
+    assert.equal(shown.data['verdict'], g.verdict, `${label}: ${asset} verdict`);
+    assert.equal(shown.verdict, g.label, `${label}: ${asset} verdict label`);
+    assert.equal(shown.tone, `report-verdict${g.verdict === 'better' ? ' good' : g.verdict === 'worse' ? ' bad' : ''}`);
+    assert.deepEqual(shown.lines, appReportLines(g, per, asset === 'BTC' ? 2 : 4, js.MIN_FORECASTS), `${label}: ${asset} report wording`);
+  }
 }
 
 /** Pretend the tab is hidden or visible again (what a real tab switch does to document.visibilityState). */

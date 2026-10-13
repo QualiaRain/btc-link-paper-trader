@@ -35,4 +35,8 @@ label.inline{flex-direction:row;align-items:center;gap:8px}label.inline input{mi
 #snapshot-banner{border-color:var(--hold)}
 .range-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
 .fetch-state{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0}.fetch-state p{margin:0;flex:1 1 100%}.fetch-state progress{flex:1 1 200px}
+.report-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin:12px 0 8px}.report-row{border-top:1px solid var(--line);padding-top:10px}
+.report-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:4px}.report-line{font-size:.85rem;line-height:1.45;margin:6px 0 0}.report-line strong{font-weight:700}
+.report-verdict{font-size:.8rem;font-weight:700;border-radius:999px;padding:3px 10px;background:var(--line);color:var(--ink)}
+.report-verdict.good{background:color-mix(in srgb,var(--pos) 18%,transparent);color:var(--pos)}.report-verdict.bad{background:color-mix(in srgb,var(--neg) 18%,transparent);color:var(--neg)}
 [hidden]{display:none!important}

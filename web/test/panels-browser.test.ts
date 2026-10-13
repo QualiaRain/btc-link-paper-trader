@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import type {Browser, Page} from 'playwright-core';
 import {PaperTrailClient} from '../src/client.ts';
 import {createOracle, type Action, type Oracle} from './oracle.ts';
-import {startApi, type RunningApi} from './server.ts';
+import {repo, startApi, type RunningApi} from './server.ts';
 import {assertNoFutureFrames, assertMatchesOracle, assertRunPanels, idle, launch, openPage, press, read, readPanels, startSession, type Seen} from './support.ts';
 
 let api: RunningApi;
@@ -73,6 +73,29 @@ describe('Run view panels (real Chromium, real API, JS oracle)', () => {
     const firstRow = await page.locator('#ledger tr').first().locator('td').first().textContent();
     const newest = nonBenchmark.filter((e: any) => e.type === 'trade').at(-1);
     assert.equal(firstRow, new Date(newest.time).toISOString().slice(11, 19), 'newest trade first');
+  }));
+
+  it('the forecast report card grades the whole sample replay exactly like the root report-card.js', t => scenario(t, async ({page, oracle}) => {
+    await startSession(page);
+    const early = await readPanels(page);
+    assert.deepEqual([early.report['BTC']!.data['verdict'], early.report['LINK']!.data['verdict']], ['none', 'none'], 'nothing is scored at the first frame');
+    await drive(page, oracle, [['#s-finish', '/advance', {kind: 'finish'}]]);
+    const done = await assertRunPanels(page, truth(oracle), 'finished sample'); // compares every grade field with the root module
+    const js = await import(repo('report-card.js')) as {reportCard(summary: object, model: string): Record<string, any>};
+    const card = js.reportCard(oracle.summary(), 'trend');
+    for (const asset of ['BTC', 'LINK'] as const) {
+      const per = oracle.summary().perAsset[asset], shown = done.report[asset]!;
+      assert.ok(per.directionHits + per.directionMisses >= 30, 'enough decided forecasts for a p-value');
+      assert.equal(Number(shown.data['hits']), per.directionHits);
+      assert.equal(Number(shown.data['decided']), per.directionHits + per.directionMisses);
+      assert.equal(Number(shown.data['flat']), per.directionFlat);
+      assert.equal(Number(shown.data['pValue']), card[asset].pValue);
+      assert.equal(shown.verdict, card[asset].label);
+    }
+    // The bundled sample under the default rule (engine.js PR #6): neither asset shows skill.
+    assert.deepEqual([card['BTC'].verdict, card['LINK'].verdict], ['unclear', 'unclear']);
+    assert.match(done.report['BTC']!.lines.join(' '), /^Called the direction right in \d+ of \d+ forecasts \(\d+%\)/);
+    assert.match(await page.locator('#report-note').textContent() ?? '', /^Direction only: calling it right doesn’t mean/);
   }));
 
   it('updates the ledger and chart as a play run progresses, and ends equal to the oracle', t => scenario(t, async ({page, seen, oracle}) => {
