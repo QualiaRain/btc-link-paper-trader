@@ -2,7 +2,7 @@ import {createAccount} from './engine.js';
 
 export const HORIZONS = [60000, 300000, 420000, 900000, 3600000, 25200000, 86400000];
 export const CONFIG_FIELDS = ['initialCash','horizonMs','model','lookbackIntervals','bufferBps',
-  'allocationFraction','stopLossBps','feeBps','slippageBps','durationMs','maxQuoteAgeMs','maxOutcomeLatenessMs'];
+  'allocationFraction','stopLossBps','maxDrawdownBps','dailyLossBps','cashYieldBps','feeBps','slippageBps','durationMs','maxQuoteAgeMs','maxOutcomeLatenessMs'];
 
 export function utcMinute(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value))
@@ -27,7 +27,7 @@ export function normalizeSettings(input) {
   const replay = input.replay ?? input.market?.settings?.replay ?? {};
   const source = replay.source ?? 'sample';
   if (!['sample','range'].includes(source)) throw new Error('Replay source must be sample or range.');
-  const halfSpreadBps = replay.halfSpreadBps ?? 2;
+  const halfSpreadBps = replay.halfSpreadBps ?? 3;
   if (typeof halfSpreadBps !== 'number' || !Number.isFinite(halfSpreadBps) || halfSpreadBps < 0 || halfSpreadBps > 1000)
     throw new Error('Assumed replay half-spread must be between 0 and 1,000 basis points.');
   const start = replay.start ?? '', end = replay.end ?? '';
