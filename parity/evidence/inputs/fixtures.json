@@ -1,0 +1,1 @@
+{"name":"fixtures","kind":"fixture","scenarios":[{"name":"browser-run-completed","path":"../fixtures/browser-run-completed.json"},{"name":"browser-run-partial-manual","path":"../fixtures/browser-run-partial-manual.json"},{"name":"browser-run-live-partial","path":"../fixtures/browser-run-live-partial.json"}]}

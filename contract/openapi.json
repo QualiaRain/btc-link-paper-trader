@@ -1,0 +1,3679 @@
+{
+  "components": {
+    "schemas": {
+      "Account": {
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/Baseline"
+          },
+          "cash": {
+            "title": "Cash",
+            "type": "number"
+          },
+          "config": {
+            "$ref": "#/components/schemas/Config"
+          },
+          "endsAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endsat"
+          },
+          "equity": {
+            "items": {
+              "$ref": "#/components/schemas/EquityPoint"
+            },
+            "title": "Equity",
+            "type": "array"
+          },
+          "forecasts": {
+            "items": {
+              "$ref": "#/components/schemas/Forecast"
+            },
+            "title": "Forecasts",
+            "type": "array"
+          },
+          "interest": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cash yield earned so far; present once any interest accrues.",
+            "title": "Interest"
+          },
+          "lastDecisionAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastdecisionat"
+          },
+          "lastFrameAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastframeat"
+          },
+          "lastValidFrameAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastvalidframeat"
+          },
+          "ledger": {
+            "items": {
+              "$ref": "#/components/schemas/LedgerEvent"
+            },
+            "title": "Ledger",
+            "type": "array"
+          },
+          "positions": {
+            "$ref": "#/components/schemas/Positions"
+          },
+          "risk": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present only when a risk limit is configured."
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "running",
+              "completed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "config",
+          "cash",
+          "positions",
+          "ledger",
+          "forecasts",
+          "equity",
+          "startedAt",
+          "endsAt",
+          "lastDecisionAt",
+          "lastFrameAt",
+          "lastValidFrameAt",
+          "status",
+          "baseline",
+          "sequence"
+        ],
+        "title": "Account",
+        "type": "object"
+      },
+      "AdvanceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "default": 1,
+            "description": "Only used by mode `frames`.",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "expectedVersion": {
+            "title": "Expectedversion",
+            "type": "integer"
+          },
+          "mode": {
+            "description": "`frames`: ingest `count` frames; `decision`: until the next automatic decision is due; `finish`: to the end.",
+            "enum": [
+              "frames",
+              "decision",
+              "finish"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "expectedVersion"
+        ],
+        "title": "AdvanceRequest",
+        "type": "object"
+      },
+      "ApiError": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ApiError",
+        "type": "object"
+      },
+      "AssetSummary": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "directionFlat": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts with a flat prediction or a flat outcome (within 1e-12 of the anchor, relative to max(1, anchor)). Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Directionflat"
+          },
+          "directionHits": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts whose predicted direction matched the observed one (flat predictions or outcomes excluded). Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Directionhits"
+          },
+          "directionMisses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts whose predicted direction was wrong. Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Directionmisses"
+          },
+          "mae": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mae"
+          },
+          "modelCloser": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts where the rule's prediction landed nearer the outcome than the same-price baseline. Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Modelcloser"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "number"
+          },
+          "samePriceCloser": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts where the same-price baseline landed nearer. Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Samepricecloser"
+          },
+          "samePriceMae": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Samepricemae"
+          },
+          "ties": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts where both errors were equal (within the same tolerance). Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Ties"
+          }
+        },
+        "required": [
+          "count",
+          "mae",
+          "samePriceMae",
+          "qty"
+        ],
+        "title": "AssetSummary",
+        "type": "object"
+      },
+      "Baseline": {
+        "properties": {
+          "cash": {
+            "title": "Cash",
+            "type": "number"
+          },
+          "positions": {
+            "$ref": "#/components/schemas/Positions"
+          }
+        },
+        "required": [
+          "cash",
+          "positions"
+        ],
+        "title": "Baseline",
+        "type": "object"
+      },
+      "Candle": {
+        "additionalProperties": false,
+        "properties": {
+          "price": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Close price.",
+            "title": "Price"
+          },
+          "time": {
+            "description": "UTC close of the completed minute, in epoch milliseconds.",
+            "title": "Time",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "time",
+          "price"
+        ],
+        "title": "Candle",
+        "type": "object"
+      },
+      "CandleJob": {
+        "properties": {
+          "coverage": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/JobProgress"
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/Receipt"
+            },
+            "title": "Receipts",
+            "type": "array"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "completed",
+              "cancelled",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "start",
+          "end",
+          "progress",
+          "receipts"
+        ],
+        "title": "CandleJob",
+        "type": "object"
+      },
+      "CandleJobCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "description": "UTC minute `YYYY-MM-DDTHH:MM`, a completed minute, at most 31 days after start.",
+            "title": "End",
+            "type": "string"
+          },
+          "lookbackIntervals": {
+            "default": 7,
+            "description": "Sizes the causal warmup window like the browser app.",
+            "maximum": 240.0,
+            "minimum": 1.0,
+            "title": "Lookbackintervals",
+            "type": "integer"
+          },
+          "model": {
+            "default": "trend",
+            "enum": [
+              "trend",
+              "same-price"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "start": {
+            "description": "UTC minute `YYYY-MM-DDTHH:MM` (inclusive scored start).",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "CandleJobCreate",
+        "type": "object"
+      },
+      "CandleSeries": {
+        "additionalProperties": false,
+        "properties": {
+          "BTC": {
+            "items": {
+              "$ref": "#/components/schemas/Candle"
+            },
+            "title": "Btc",
+            "type": "array"
+          },
+          "LINK": {
+            "items": {
+              "$ref": "#/components/schemas/Candle"
+            },
+            "title": "Link",
+            "type": "array"
+          }
+        },
+        "required": [
+          "BTC",
+          "LINK"
+        ],
+        "title": "CandleSeries",
+        "type": "object"
+      },
+      "CloseRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedVersion": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedversion"
+          }
+        },
+        "title": "CloseRequest",
+        "type": "object"
+      },
+      "Config": {
+        "description": "Normalized, frozen rules.",
+        "properties": {
+          "allocationFraction": {
+            "title": "Allocationfraction",
+            "type": "number"
+          },
+          "bufferBps": {
+            "title": "Bufferbps",
+            "type": "number"
+          },
+          "cashYieldBps": {
+            "default": 0,
+            "description": "Absent in accounts saved before cash yield existed (no yield).",
+            "title": "Cashyieldbps",
+            "type": "number"
+          },
+          "dailyLossBps": {
+            "default": 0,
+            "description": "Absent in accounts saved before risk limits existed (no limit).",
+            "title": "Dailylossbps",
+            "type": "number"
+          },
+          "durationMs": {
+            "title": "Durationms",
+            "type": "number"
+          },
+          "feeBps": {
+            "title": "Feebps",
+            "type": "number"
+          },
+          "horizonMs": {
+            "title": "Horizonms",
+            "type": "number"
+          },
+          "initialCash": {
+            "title": "Initialcash",
+            "type": "number"
+          },
+          "lookbackIntervals": {
+            "title": "Lookbackintervals",
+            "type": "integer"
+          },
+          "maxDrawdownBps": {
+            "default": 0,
+            "description": "Absent in accounts saved before risk limits existed (no limit).",
+            "title": "Maxdrawdownbps",
+            "type": "number"
+          },
+          "maxOutcomeLatenessMs": {
+            "title": "Maxoutcomelatenessms",
+            "type": "number"
+          },
+          "maxQuoteAgeMs": {
+            "title": "Maxquoteagems",
+            "type": "number"
+          },
+          "mode": {
+            "enum": [
+              "replay",
+              "live"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "model": {
+            "enum": [
+              "trend",
+              "same-price"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "slippageBps": {
+            "title": "Slippagebps",
+            "type": "number"
+          },
+          "stopLossBps": {
+            "title": "Stoplossbps",
+            "type": "number"
+          }
+        },
+        "required": [
+          "mode",
+          "initialCash",
+          "horizonMs",
+          "model",
+          "lookbackIntervals",
+          "bufferBps",
+          "allocationFraction",
+          "stopLossBps",
+          "feeBps",
+          "slippageBps",
+          "durationMs",
+          "maxQuoteAgeMs",
+          "maxOutcomeLatenessMs"
+        ],
+        "title": "Config",
+        "type": "object"
+      },
+      "ConfigInput": {
+        "additionalProperties": false,
+        "description": "Frozen account rules. Omitted fields take the documented defaults ($1,000 cash, 7-minute horizon, ...).",
+        "properties": {
+          "allocationFraction": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Fraction of available cash per asset, 0 to 0.5.",
+            "title": "Allocationfraction"
+          },
+          "bufferBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bufferbps"
+          },
+          "cashYieldBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Annual yield on idle cash, 0-2000 bps, compounded continuously; 0 disables it.",
+            "title": "Cashyieldbps"
+          },
+          "dailyLossBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Loss limit from the UTC day's first observed net value, 0-9999 bps; 0 disables it. A breach closes positions and blocks new entries until the next UTC day.",
+            "title": "Dailylossbps"
+          },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Live-session duration; replay uses the scored range instead.",
+            "title": "Durationms"
+          },
+          "feeBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feebps"
+          },
+          "horizonMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Forecast horizon; one of 1, 5, 7, 15, 60, 420 or 1440 minutes.",
+            "title": "Horizonms"
+          },
+          "initialCash": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Starting simulated cash in USD.",
+            "title": "Initialcash"
+          },
+          "lookbackIntervals": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Earlier completed observations used by the trend rule (1-240).",
+            "title": "Lookbackintervals"
+          },
+          "maxDrawdownBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Account drawdown limit from the observed peak net value, 0-9999 bps; 0 disables it. A breach closes positions and blocks new entries for the rest of the session.",
+            "title": "Maxdrawdownbps"
+          },
+          "maxOutcomeLatenessMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxoutcomelatenessms"
+          },
+          "maxQuoteAgeMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxquoteagems"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "replay",
+                  "live"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This service only runs replays; `live` is accepted in settings files but refused by /v1/replays.",
+            "title": "Mode"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "enum": [
+                  "trend",
+                  "same-price"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "slippageBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slippagebps"
+          },
+          "stopLossBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "0 disables the stop loss.",
+            "title": "Stoplossbps"
+          }
+        },
+        "title": "ConfigInput",
+        "type": "object"
+      },
+      "Defaults": {
+        "properties": {
+          "horizonsMs": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Horizonsms",
+            "type": "array"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          }
+        },
+        "required": [
+          "settings",
+          "horizonsMs"
+        ],
+        "title": "Defaults",
+        "type": "object"
+      },
+      "EquityPoint": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "buyHoldValue": {
+            "title": "Buyholdvalue",
+            "type": "number"
+          },
+          "cashValue": {
+            "title": "Cashvalue",
+            "type": "number"
+          },
+          "time": {
+            "title": "Time",
+            "type": "number"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "time",
+          "at",
+          "value",
+          "buyHoldValue",
+          "cashValue"
+        ],
+        "title": "EquityPoint",
+        "type": "object"
+      },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "currentVersion": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on `stale_session`: the session's current version.",
+            "title": "Currentversion"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
+      "Forecast": {
+        "additionalProperties": true,
+        "properties": {
+          "actual": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual"
+          },
+          "anchor": {
+            "title": "Anchor",
+            "type": "number"
+          },
+          "asset": {
+            "enum": [
+              "BTC",
+              "LINK"
+            ],
+            "title": "Asset",
+            "type": "string"
+          },
+          "historyEnd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Historyend"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "issuedAt": {
+            "title": "Issuedat",
+            "type": "number"
+          },
+          "latenessMs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latenessms"
+          },
+          "model": {
+            "enum": [
+              "trend",
+              "same-price"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "prediction": {
+            "title": "Prediction",
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "settled",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "targetAt": {
+            "title": "Targetat",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "asset",
+          "model",
+          "issuedAt",
+          "targetAt",
+          "anchor",
+          "prediction",
+          "historyEnd",
+          "status",
+          "observedAt",
+          "actual",
+          "latenessMs"
+        ],
+        "title": "Forecast",
+        "type": "object"
+      },
+      "FrameView": {
+        "description": "The latest ingested market frame. Later frames are never exposed.",
+        "properties": {
+          "quotes": {
+            "$ref": "#/components/schemas/Quotes"
+          },
+          "time": {
+            "title": "Time",
+            "type": "number"
+          }
+        },
+        "required": [
+          "time",
+          "quotes"
+        ],
+        "title": "FrameView",
+        "type": "object"
+      },
+      "Hashes": {
+        "properties": {
+          "algorithm": {
+            "title": "Algorithm",
+            "type": "string"
+          },
+          "configSha256": {
+            "title": "Configsha256",
+            "type": "string"
+          },
+          "marketSha256": {
+            "title": "Marketsha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "configSha256",
+          "marketSha256"
+        ],
+        "title": "Hashes",
+        "type": "object"
+      },
+      "Health": {
+        "properties": {
+          "apiVersion": {
+            "title": "Apiversion",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "realTrading": {
+            "const": false,
+            "default": false,
+            "title": "Realtrading",
+            "type": "boolean"
+          },
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "apiVersion",
+          "engine"
+        ],
+        "title": "Health",
+        "type": "object"
+      },
+      "HistoryExport": {
+        "description": "`paper-trail-history-v2`: every saved run, oldest first.",
+        "properties": {
+          "exportedAt": {
+            "title": "Exportedat",
+            "type": "string"
+          },
+          "format": {
+            "const": "paper-trail-history-v2",
+            "title": "Format",
+            "type": "string"
+          },
+          "notice": {
+            "title": "Notice",
+            "type": "string"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunRecord"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "format",
+          "exportedAt",
+          "notice",
+          "runs"
+        ],
+        "title": "HistoryExport",
+        "type": "object"
+      },
+      "JobProgress": {
+        "properties": {
+          "asset": {
+            "anyOf": [
+              {
+                "enum": [
+                  "BTC",
+                  "LINK"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset"
+          },
+          "completed": {
+            "title": "Completed",
+            "type": "integer"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "completed",
+          "total"
+        ],
+        "title": "JobProgress",
+        "type": "object"
+      },
+      "LedgerEvent": {
+        "additionalProperties": true,
+        "description": "Ledger entry; fields beyond the common ones depend on `type`.",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "time": {
+            "title": "Time",
+            "type": "number"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "time",
+          "at"
+        ],
+        "title": "LedgerEvent",
+        "type": "object"
+      },
+      "OrderRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "enum": [
+              "BTC",
+              "LINK"
+            ],
+            "title": "Asset",
+            "type": "string"
+          },
+          "dollars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Buy: dollars to spend (required, > 0). Sell: net proceeds wanted; omit to sell the whole position.",
+            "title": "Dollars"
+          },
+          "expectedVersion": {
+            "title": "Expectedversion",
+            "type": "integer"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "side",
+          "expectedVersion"
+        ],
+        "title": "OrderRequest",
+        "type": "object"
+      },
+      "PerAsset": {
+        "properties": {
+          "BTC": {
+            "$ref": "#/components/schemas/AssetSummary"
+          },
+          "LINK": {
+            "$ref": "#/components/schemas/AssetSummary"
+          }
+        },
+        "required": [
+          "BTC",
+          "LINK"
+        ],
+        "title": "PerAsset",
+        "type": "object"
+      },
+      "Position": {
+        "additionalProperties": true,
+        "properties": {
+          "costBasis": {
+            "title": "Costbasis",
+            "type": "number"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "number"
+          }
+        },
+        "required": [
+          "qty",
+          "costBasis"
+        ],
+        "title": "Position",
+        "type": "object"
+      },
+      "Positions": {
+        "properties": {
+          "BTC": {
+            "$ref": "#/components/schemas/Position"
+          },
+          "LINK": {
+            "$ref": "#/components/schemas/Position"
+          }
+        },
+        "required": [
+          "BTC",
+          "LINK"
+        ],
+        "title": "Positions",
+        "type": "object"
+      },
+      "Quote": {
+        "properties": {
+          "ask": {
+            "title": "Ask",
+            "type": "number"
+          },
+          "bid": {
+            "title": "Bid",
+            "type": "number"
+          },
+          "mid": {
+            "title": "Mid",
+            "type": "number"
+          },
+          "observedAt": {
+            "title": "Observedat",
+            "type": "number"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "bid",
+          "ask",
+          "mid",
+          "observedAt"
+        ],
+        "title": "Quote",
+        "type": "object"
+      },
+      "Quotes": {
+        "properties": {
+          "BTC": {
+            "$ref": "#/components/schemas/Quote"
+          },
+          "LINK": {
+            "$ref": "#/components/schemas/Quote"
+          }
+        },
+        "required": [
+          "BTC",
+          "LINK"
+        ],
+        "title": "Quotes",
+        "type": "object"
+      },
+      "Receipt": {
+        "description": "Evidence of one HTTP request: what was asked, when it arrived and a hash of the raw body.",
+        "properties": {
+          "asset": {
+            "enum": [
+              "BTC",
+              "LINK"
+            ],
+            "title": "Asset",
+            "type": "string"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "httpDate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Httpdate"
+          },
+          "receivedAt": {
+            "title": "Receivedat",
+            "type": "number"
+          },
+          "rowCount": {
+            "title": "Rowcount",
+            "type": "integer"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "url",
+          "receivedAt",
+          "httpDate",
+          "sha256",
+          "attempts",
+          "rowCount"
+        ],
+        "title": "Receipt",
+        "type": "object"
+      },
+      "ReplayRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "candleJobId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Range source: a completed candle job (exclusive with `candles`).",
+            "title": "Candlejobid"
+          },
+          "candles": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandleSeries"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Range source: completed one-minute closes, warmup included (exclusive with `candleJobId`)."
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SettingsInput"
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "title": "ReplayRequest",
+        "type": "object"
+      },
+      "ReplayResult": {
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "run": {
+            "$ref": "#/components/schemas/RunMetadata"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "run",
+          "summary",
+          "account"
+        ],
+        "title": "ReplayResult",
+        "type": "object"
+      },
+      "ReplaySettings": {
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "halfSpreadBps": {
+            "title": "Halfspreadbps",
+            "type": "number"
+          },
+          "source": {
+            "enum": [
+              "sample",
+              "range"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "start",
+          "end",
+          "halfSpreadBps"
+        ],
+        "title": "ReplaySettings",
+        "type": "object"
+      },
+      "ReplaySettingsInput": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "UTC minute `YYYY-MM-DDTHH:MM` (range source).",
+            "title": "End"
+          },
+          "halfSpreadBps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Assumed half-spread each side of the close, 0-1000 bps.",
+            "title": "Halfspreadbps"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sample",
+                  "range"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "UTC minute `YYYY-MM-DDTHH:MM` (range source).",
+            "title": "Start"
+          }
+        },
+        "title": "ReplaySettingsInput",
+        "type": "object"
+      },
+      "RiskState": {
+        "description": "Account-level limit state; present only when a drawdown or daily loss limit is configured.",
+        "properties": {
+          "dayOpenValue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dayopenvalue"
+          },
+          "dayStart": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daystart"
+          },
+          "haltedUntil": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set while the daily loss limit halts entries (next UTC midnight).",
+            "title": "Halteduntil"
+          },
+          "killedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the drawdown limit halted entries for the session.",
+            "title": "Killedat"
+          },
+          "peakValue": {
+            "title": "Peakvalue",
+            "type": "number"
+          }
+        },
+        "required": [
+          "peakValue",
+          "dayStart",
+          "dayOpenValue",
+          "killedAt",
+          "haltedUntil"
+        ],
+        "title": "RiskState",
+        "type": "object"
+      },
+      "RunList": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunMetadata"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "RunList",
+        "type": "object"
+      },
+      "RunMetadata": {
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "createdAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Createdat"
+          },
+          "hashes": {
+            "$ref": "#/components/schemas/Hashes"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "manualTradeCount": {
+            "title": "Manualtradecount",
+            "type": "integer"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "scoreEnd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scoreend"
+          },
+          "scoreStart": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scorestart"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "createdAt",
+          "updatedAt",
+          "status",
+          "config",
+          "summary",
+          "hashes",
+          "manualTradeCount",
+          "source",
+          "scoreStart",
+          "scoreEnd"
+        ],
+        "title": "RunMetadata",
+        "type": "object"
+      },
+      "RunRecord": {
+        "additionalProperties": true,
+        "description": "Full `paper-trail-run-v2` record: frozen config, account, ledger, summary, evidence and hashes.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "string"
+          },
+          "format": {
+            "const": "paper-trail-run-v2",
+            "title": "Format",
+            "type": "string"
+          },
+          "hashes": {
+            "$ref": "#/components/schemas/Hashes"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "manualTradeCount": {
+            "title": "Manualtradecount",
+            "type": "integer"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "updatedAt": {
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "format",
+          "id",
+          "name",
+          "createdAt",
+          "updatedAt",
+          "status",
+          "config",
+          "summary",
+          "account",
+          "market",
+          "hashes",
+          "manualTradeCount"
+        ],
+        "title": "RunRecord",
+        "type": "object"
+      },
+      "SaveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedVersion": {
+            "title": "Expectedversion",
+            "type": "integer"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "required": [
+          "expectedVersion"
+        ],
+        "title": "SaveRequest",
+        "type": "object"
+      },
+      "SessionAccount": {
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SessionState"
+          }
+        },
+        "required": [
+          "state",
+          "account"
+        ],
+        "title": "SessionAccount",
+        "type": "object"
+      },
+      "SessionCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "candleJobId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Range source: a completed candle job (exclusive with `candles`).",
+            "title": "Candlejobid"
+          },
+          "candles": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandleSeries"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Range source: supplied candles (exclusive with `candleJobId`)."
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SettingsInput"
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "title": "SessionCreate",
+        "type": "object"
+      },
+      "SessionSave": {
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/RunMetadata"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SessionState"
+          }
+        },
+        "required": [
+          "run",
+          "state"
+        ],
+        "title": "SessionSave",
+        "type": "object"
+      },
+      "SessionState": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/Config"
+          },
+          "currentFrame": {
+            "$ref": "#/components/schemas/FrameView"
+          },
+          "cursor": {
+            "description": "Index of the latest ingested frame in the dataset.",
+            "title": "Cursor",
+            "type": "integer"
+          },
+          "frameCount": {
+            "title": "Framecount",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "sample",
+              "historical",
+              "live"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "manualTradeCount": {
+            "title": "Manualtradecount",
+            "type": "integer"
+          },
+          "nextDecisionAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the next automatic decision is due (null once completed).",
+            "title": "Nextdecisionat"
+          },
+          "runId": {
+            "description": "Stable id of the run this session saves to; owned by this session while it is open.",
+            "title": "Runid",
+            "type": "string"
+          },
+          "savedVersion": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Session version captured by the latest snapshot, null if never saved.",
+            "title": "Savedversion"
+          },
+          "scoreEnd": {
+            "title": "Scoreend",
+            "type": "number"
+          },
+          "scoreStart": {
+            "title": "Scorestart",
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "completed",
+              "closed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "version": {
+            "description": "Increments on every state change; send it back as `expectedVersion`.",
+            "title": "Version",
+            "type": "integer"
+          },
+          "warmupFrameCount": {
+            "title": "Warmupframecount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "runId",
+          "status",
+          "version",
+          "kind",
+          "cursor",
+          "frameCount",
+          "warmupFrameCount",
+          "scoreStart",
+          "scoreEnd",
+          "currentFrame",
+          "nextDecisionAt",
+          "config",
+          "summary",
+          "savedVersion",
+          "manualTradeCount"
+        ],
+        "title": "SessionState",
+        "type": "object"
+      },
+      "SessionStep": {
+        "properties": {
+          "events": {
+            "description": "Ledger events produced by this call, in order.",
+            "items": {
+              "$ref": "#/components/schemas/LedgerEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "framesIngested": {
+            "title": "Framesingested",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SessionState"
+          }
+        },
+        "required": [
+          "state",
+          "events",
+          "framesIngested"
+        ],
+        "title": "SessionStep",
+        "type": "object"
+      },
+      "Settings": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/Config"
+          },
+          "format": {
+            "const": "paper-trail-settings-v2",
+            "title": "Format",
+            "type": "string"
+          },
+          "replay": {
+            "$ref": "#/components/schemas/ReplaySettings"
+          }
+        },
+        "required": [
+          "format",
+          "config",
+          "replay"
+        ],
+        "title": "Settings",
+        "type": "object"
+      },
+      "SettingsInput": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/ConfigInput"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "paper-trail-settings-v2",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "replay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReplaySettingsInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "config"
+        ],
+        "title": "SettingsInput",
+        "type": "object"
+      },
+      "Summary": {
+        "properties": {
+          "buyHoldEquity": {
+            "title": "Buyholdequity",
+            "type": "number"
+          },
+          "buyHoldReturnPct": {
+            "title": "Buyholdreturnpct",
+            "type": "number"
+          },
+          "cash": {
+            "title": "Cash",
+            "type": "number"
+          },
+          "cashBenchmark": {
+            "description": "Initial cash grown at the configured cash yield to the valuation time.",
+            "title": "Cashbenchmark",
+            "type": "number"
+          },
+          "drawdownPct": {
+            "title": "Drawdownpct",
+            "type": "number"
+          },
+          "equity": {
+            "title": "Equity",
+            "type": "number"
+          },
+          "expiredForecasts": {
+            "title": "Expiredforecasts",
+            "type": "integer"
+          },
+          "fees": {
+            "title": "Fees",
+            "type": "number"
+          },
+          "forecastCount": {
+            "title": "Forecastcount",
+            "type": "integer"
+          },
+          "interestEarned": {
+            "default": 0,
+            "description": "Absent in summaries saved before cash yield existed.",
+            "title": "Interestearned",
+            "type": "number"
+          },
+          "mae": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mae"
+          },
+          "maxDrawdownPct": {
+            "title": "Maxdrawdownpct",
+            "type": "number"
+          },
+          "pendingForecasts": {
+            "title": "Pendingforecasts",
+            "type": "integer"
+          },
+          "perAsset": {
+            "$ref": "#/components/schemas/PerAsset"
+          },
+          "returnPct": {
+            "title": "Returnpct",
+            "type": "number"
+          },
+          "riskHalts": {
+            "default": 0,
+            "description": "Number of `risk_halt` events. Absent in summaries saved before risk limits existed.",
+            "title": "Riskhalts",
+            "type": "integer"
+          },
+          "samePriceMae": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Samepricemae"
+          },
+          "settledForecasts": {
+            "title": "Settledforecasts",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tradeCount": {
+            "title": "Tradecount",
+            "type": "integer"
+          },
+          "tradingHalted": {
+            "anyOf": [
+              {
+                "enum": [
+                  "max_drawdown",
+                  "daily_loss"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The limit currently blocking new entries, or null. Absent in summaries saved before risk limits existed.",
+            "title": "Tradinghalted"
+          },
+          "valuationAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valuationat"
+          },
+          "valuationIsNetLiquidation": {
+            "title": "Valuationisnetliquidation",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "equity",
+          "cash",
+          "returnPct",
+          "buyHoldEquity",
+          "buyHoldReturnPct",
+          "cashBenchmark",
+          "drawdownPct",
+          "maxDrawdownPct",
+          "fees",
+          "tradeCount",
+          "forecastCount",
+          "settledForecasts",
+          "pendingForecasts",
+          "expiredForecasts",
+          "mae",
+          "samePriceMae",
+          "perAsset",
+          "valuationAt",
+          "valuationIsNetLiquidation"
+        ],
+        "title": "Summary",
+        "type": "object"
+      },
+      "TickRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedVersion": {
+            "title": "Expectedversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expectedVersion"
+        ],
+        "title": "TickRequest",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Python owns replay, forecasting and accounting. Minute candles cannot validate millisecond predictions, and a profitable replay does not establish a reliable edge.",
+    "summary": "Replay, forecast and paper-accounting service. Simulated cash only; no orders, keys or wallets.",
+    "title": "BTC/LINK Paper Trail API",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/candle-jobs": {
+      "post": {
+        "operationId": "createCandleJob",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandleJobCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandleJob"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Start retrieving completed one-minute closes for BTC and LINK (public data, no keys)",
+        "tags": [
+          "candles"
+        ]
+      }
+    },
+    "/v1/candle-jobs/{job_id}": {
+      "get": {
+        "operationId": "getCandleJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandleJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Progress, receipts and coverage",
+        "tags": [
+          "candles"
+        ]
+      }
+    },
+    "/v1/candle-jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancelCandleJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandleJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Cancel a running job; no run is created from it",
+        "tags": [
+          "candles"
+        ]
+      }
+    },
+    "/v1/defaults": {
+      "get": {
+        "operationId": "getDefaults",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Defaults"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Defaults",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "service"
+        ]
+      }
+    },
+    "/v1/replays": {
+      "post": {
+        "operationId": "createReplay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplayResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "summary": "Run a complete replay and save it to run history",
+        "tags": [
+          "replay"
+        ]
+      }
+    },
+    "/v1/runs": {
+      "get": {
+        "operationId": "listRuns",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Runs",
+        "tags": [
+          "history"
+        ]
+      }
+    },
+    "/v1/runs/export": {
+      "get": {
+        "operationId": "exportAllRuns",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryExport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Export every saved run (paper-trail-history-v2)",
+        "tags": [
+          "export"
+        ]
+      }
+    },
+    "/v1/runs/import": {
+      "post": {
+        "description": "Checks structure, evidence hashes and summary consistency (corruption checks, not tamper-proofing). An existing run with the same id is never overwritten unless `replace=true`; importing the identical record again is a no-op.",
+        "operationId": "importRun",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "replace",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Replace",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "description": "A `paper-trail-run-v2` record exported by this service or by the browser app.",
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunMetadata"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "summary": "Import a saved run exported by the browser app",
+        "tags": [
+          "history"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}": {
+      "get": {
+        "operationId": "getRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "summary": "Get Run",
+        "tags": [
+          "history"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/export": {
+      "get": {
+        "operationId": "exportRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "summary": "Results export: the full run record with evidence and hashes",
+        "tags": [
+          "export"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/settings": {
+      "get": {
+        "operationId": "exportRunSettings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "summary": "Settings export: frozen rules and replay boundaries, importable before a new run",
+        "tags": [
+          "export"
+        ]
+      }
+    },
+    "/v1/sessions": {
+      "post": {
+        "operationId": "createSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionState"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Start a stepwise replay session (first frame ingested)",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}": {
+      "delete": {
+        "operationId": "closeSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CloseRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Close the session and release its run id (saved snapshots remain)",
+        "tags": [
+          "sessions"
+        ]
+      },
+      "get": {
+        "operationId": "getSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Get Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/account": {
+      "get": {
+        "operationId": "getSessionAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionAccount"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Full account: ledger, forecasts, equity",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/advance": {
+      "post": {
+        "operationId": "advanceSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdvanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStep"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Ingest the next frame(s), causally",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/orders": {
+      "post": {
+        "operationId": "placeOrder",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStep"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Manual paper order at the current frame",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/save": {
+      "post": {
+        "operationId": "saveSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSave"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Snapshot the session into run history (same run id)",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/tick": {
+      "post": {
+        "operationId": "tickSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TickRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStep"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          }
+        },
+        "summary": "Live paper session: fetch fresh public quotes server-side and ingest them",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/settings/normalize": {
+      "post": {
+        "operationId": "normalizeSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "summary": "Normalize",
+        "tags": [
+          "settings"
+        ]
+      }
+    }
+  }
+}

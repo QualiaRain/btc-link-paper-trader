@@ -26,7 +26,7 @@ Paper Trail was built by one operator directing AI coding agents (Claude Code an
 | [#5](https://github.com/QualiaRain/btc-link-paper-trader/pull/5) | Drawdown and daily-loss limits, cheapest-venue fee defaults, optional cash yield | Claude Code | 52 tests; real-browser replays at four cost levels. Retested before merge: 52/52, plus a browser sample replay matching the reported $997.58 |
 | [#6](https://github.com/QualiaRain/btc-link-paper-trader/pull/6) | Forecast report card: does the rule call direction better than chance? | Claude Code, with an independent critic agent | 61 tests, including a random-walk control; browser render at desktop and phone width; numbers cross-checked by a separate replay |
 | [#7](https://github.com/QualiaRain/btc-link-paper-trader/pull/7) | Faster forecast settling (31-day replay 100 s → 1.5 s) | Claude Code | Full accounts byte-identical before and after on three 31-day runs; two deliberately broken variants fail the new tests |
-| [#4](https://github.com/QualiaRain/btc-link-paper-trader/pull/4) (open) | Python backend + TypeScript frontend (requested) | Claude Code builders; Codex follow-up | Python must match goldens produced by the JavaScript engine; full suite (JS, Python, TypeScript with real Chromium) rerun independently before each push; GitHub CI |
+| [#4](https://github.com/QualiaRain/btc-link-paper-trader/pull/4) | Python backend + TypeScript frontend (requested), run locally with `scripts/run-local.sh` | Claude Code builders; Codex follow-up | Python must match goldens produced by the JavaScript engine; full suite (JS, Python, TypeScript with real Chromium) rerun independently before each push; GitHub CI; fresh-clone rehearsal of the launcher (sample replay matches, saved run survives a restart, unreachable off loopback) |
 
 ## Mistakes caught, and how
 
@@ -62,7 +62,7 @@ Paper Trail was built by one operator directing AI coding agents (Claude Code an
 - **No trading edge.** One 30-hour window proves nothing either way, and repeatedly tuning settings on the same data would overfit them. A test that would mean something has been drafted: rules and pass criteria fixed in advance, then judged on randomly chosen unseen month-long windows. It has not been frozen or run.
 - **Paper fills are not real fills.** Replay bid/ask is modeled from candle closes with an assumed spread. Latency, queue position, market impact, taxes and funding are not modeled.
 - **Live mode from the cloud is unexercised.** The build environment cannot reach Coinbase, so live polling was tested only with fixtures, not end to end.
-- **The Python/TypeScript version has no hosting, authentication or rate limits.** It is for local use until those are added.
+- **The Python/TypeScript version is local only.** It has no hosting, authentication or rate limits, listens on 127.0.0.1, and must not be exposed until those are added.
 - **No real money, exchange keys or order endpoints exist anywhere in the code.**
 
 ## Reproduce

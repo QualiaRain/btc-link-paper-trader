@@ -1,1 +1,1 @@
-{"name":"btc-link-paper-trader","version":"2.0.0","private":true,"type":"module","scripts":{"test":"node --test *.test.js"}}
+{"name":"btc-link-paper-trader","version":"2.0.0","private":true,"type":"module","scripts":{"test":"node --test *.test.js","test:parity":"node --test parity/*.test.mjs parity/*/*.test.mjs"}}

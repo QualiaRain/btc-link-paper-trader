@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper Trail · Python API</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">PAPER TRAIL · PYTHON API PREVIEW</p>
+    <h1>Replay on the Python backend</h1>
+    <p class="muted">Simulated cash only. This page is a TypeScript client of the versioned <code>/v1</code> API; replay, forecasts and accounting run in Python. No orders, keys or wallets. The original app remains at the repository root.</p>
+  </header>
+  <p id="notice" role="status" class="notice">Connecting…</p>
+  <nav class="tabs" aria-label="Views">
+    <button type="button" id="view-config" class="tab" aria-current="page">Config</button>
+    <button type="button" id="view-run" class="tab">Run</button>
+    <button type="button" id="view-history" class="tab">History</button>
+  </nav>
+
+  <section class="panel" id="session-panel" data-status="none" aria-labelledby="session-title">
+    <h2 id="session-title">Stepwise session <span class="muted small">(sample, simulated cash)</span></h2>
+    <p class="muted small">Starts from the settings in Config. The server reveals one frame at a time; later frames are never sent. Manual orders and stepping work only while paused.</p>
+    <p id="s-notice" role="status" class="notice">No session yet.</p>
+    <div class="actions">
+      <label class="inline">Run name<input id="name" type="text" maxlength="100" placeholder="Optional" autocomplete="off"></label>
+      <button type="button" id="s-start" class="primary">Start session</button>
+      <button type="button" id="s-start-live">Start live paper session</button>
+      <button type="button" id="s-archive" disabled>Save &amp; start another</button>
+      <button type="button" id="s-close" disabled>Close session</button>
+    </div>
+    <div id="fetch-state" class="fetch-state" hidden>
+      <p id="fetch-label" class="small" role="status"></p>
+      <progress id="fetch-progress" value="0" max="1"></progress>
+      <button type="button" id="fetch-cancel">Cancel fetch</button>
+    </div>
+    <p id="fetch-summary" class="muted small"></p>
+    <p id="s-empty" class="muted">Start a session to step through the included sample one frame or one decision at a time, or open a saved run from History.</p>
+    <p id="s-background" class="muted" hidden>A live session is paused in the background while you view a read-only snapshot. Close the snapshot to return to it.</p>
+    <div id="s-state" hidden>
+      <dl class="clock">
+        <div><dt>Clock (latest frame)</dt><dd id="s-clock"></dd></div>
+        <div><dt>State</dt><dd id="s-status"></dd></div>
+        <div><dt>Progress</dt><dd><span id="s-cursor"></span><br><progress id="s-progress" value="0" max="1"></progress></dd></div>
+      </dl>
+      <dl>
+        <div><dt>Cash</dt><dd id="s-cash"></dd></div>
+        <div><dt>Net value</dt><dd id="s-equity"></dd></div>
+        <div><dt>Buy &amp; hold</dt><dd id="s-buyhold"></dd></div>
+        <div><dt>Fees paid</dt><dd id="s-fees"></dd></div>
+        <div><dt>Paper trades</dt><dd id="s-trades"></dd></div>
+        <div><dt>Manual trades</dt><dd id="s-manual"></dd></div>
+      </dl>
+      <div class="assets">
+        <div class="asset"><strong>BTC</strong> <span id="s-price-BTC"></span> <span class="muted small">position <span id="s-qty-BTC"></span></span>
+          <div class="actions"><button type="button" id="s-buy-BTC" disabled>Buy $100</button><button type="button" id="s-sell-BTC" disabled>Sell all</button></div></div>
+        <div class="asset"><strong>LINK</strong> <span id="s-price-LINK"></span> <span class="muted small">position <span id="s-qty-LINK"></span></span>
+          <div class="actions"><button type="button" id="s-buy-LINK" disabled>Buy $100</button><button type="button" id="s-sell-LINK" disabled>Sell all</button></div></div>
+      </div>
+      <p id="s-live-note" class="muted small" hidden></p>
+      <div class="actions">
+        <button type="button" id="s-tick" disabled hidden>Tick now</button>
+        <button type="button" id="s-next-frame" disabled>Next frame</button>
+        <button type="button" id="s-next-decision" disabled>Next decision</button>
+        <button type="button" id="s-play" disabled>Play</button>
+        <button type="button" id="s-finish" disabled>Finish</button>
+        <button type="button" id="s-save" disabled>Save snapshot</button>
+        <button type="button" id="s-export" disabled>Export run ↓</button>
+      </div>
+      <p class="muted small"><span id="s-saved"></span> · run <code id="s-run-id"></code></p>
+      <h3>Activity <span class="muted small">(newest first)</span></h3>
+      <ol id="s-activity" class="activity"></ol>
+    </div>
+  </section>
+
+  <div id="config-view">
+    <section class="panel">
+      <h2>Settings</h2>
+      <form id="settings" autocomplete="off" novalidate>
+        <label>Starting cash ($)<input id="initialCash" type="number" min="1" step="any"></label>
+        <label>Forecast horizon<select id="horizonMs"></select></label>
+        <label>Rule<select id="model"><option value="trend">Trend</option><option value="same-price">Same price</option></select></label>
+        <label>Lookback intervals<input id="lookbackIntervals" type="number" min="1" max="240" step="1"></label>
+        <label>Entry buffer (bps)<input id="bufferBps" type="number" min="0" step="any"></label>
+        <label>Allocation per asset (%)<input id="allocation" type="number" min="0" max="50" step="any"></label>
+        <label>Stop loss (bps, 0 = off)<input id="stopLossBps" type="number" min="0" step="any"></label>
+        <label>Max drawdown from peak (bps, 0 = off)<input id="maxDrawdownBps" type="number" min="0" max="9999" step="any"></label>
+        <label>Daily loss limit per UTC day (bps, 0 = off)<input id="dailyLossBps" type="number" min="0" max="9999" step="any"></label>
+        <label>Fee per fill (bps)<input id="feeBps" type="number" min="0" step="any"></label>
+        <label>Slippage per fill (bps)<input id="slippageBps" type="number" min="0" step="any"></label>
+        <label>Assumed half-spread (bps)<input id="halfSpreadBps" type="number" min="0" step="any"></label>
+        <label>Replay source<select id="replaySource"><option value="sample">Included sample</option><option value="range">UTC date range (fetched by the server)</option></select></label>
+        <label>Live duration (hours)<input id="liveHours" type="number" min="0.01" step="any"></label>
+        <label>Idle cash yield (% per year, 0 = off)<input id="cashYield" type="number" min="0" max="20" step="any"></label>
+        <div id="range-fields" class="wide range-fields" hidden>
+          <label>Start (UTC minute)<input id="rangeStart" type="datetime-local" step="60"></label>
+          <label>End (UTC minute)<input id="rangeEnd" type="datetime-local" step="60"></label>
+          <p class="muted small wide">The server fetches public one-minute closes for both assets (at most 31 days, ending at a completed minute). No run is created until both assets and both boundaries are validated; missing minutes are reported, never filled.</p>
+        </div>
+        <div class="actions wide">
+          <button type="submit" id="run" class="primary">Run replay of included sample</button>
+          <label class="file">Import settings JSON<input id="settings-file" type="file" accept="application/json"></label>
+        </div>
+      </form>
+    </section>
+    <section class="panel" id="result" hidden>
+      <h2>Result <span class="muted" id="result-name"></span></h2>
+      <dl id="metrics"></dl>
+      <div class="actions"><button id="export-run" type="button">Export run ↓</button><button id="export-settings" type="button">Export settings ↓</button></div>
+    </section>
+  </div>
+
+  <div id="run-view" hidden>
+    <section class="panel" id="snapshot-banner" hidden role="status">
+      <p id="snapshot-text" class="small"></p>
+      <button type="button" id="snapshot-close">Close snapshot</button>
+    </section>
+    <section class="panel" id="run-empty">
+      <p class="muted">No run to show. Start a session from Config, or open a saved run from History.</p>
+    </section>
+    <div id="run-body" hidden>
+      <section class="panel" aria-labelledby="run-name-label">
+        <p class="eyebrow" id="run-badge"></p>
+        <h2 id="run-name-label"></h2>
+        <p class="muted small" id="run-detail"></p>
+        <dl id="run-metrics">
+          <div><dt>Net value</dt><dd id="m-equity"></dd></div>
+          <div><dt>Return</dt><dd id="m-return"></dd></div>
+          <div><dt>Buy &amp; hold</dt><dd id="m-buyhold"></dd></div>
+          <div><dt>Max drawdown</dt><dd id="m-drawdown"></dd></div>
+          <div><dt>Fees paid</dt><dd id="m-fees"></dd></div>
+          <div><dt>Paper trades</dt><dd id="m-trades"></dd></div>
+          <div class="wide-item"><dt>Forecasts</dt><dd id="m-forecasts"></dd></div>
+        </dl>
+      </section>
+      <section class="panel" aria-labelledby="chart-title">
+        <h2 id="chart-title">Account value</h2>
+        <div class="legend" aria-hidden="true"><span class="key strategy">Strategy (net of exit costs)</span><span class="key buyhold">Buy &amp; hold</span><span class="key cash" id="cash-legend">Cash</span></div>
+        <div id="chart"></div>
+      </section>
+      <section class="panel report-card" id="report-card" aria-labelledby="report-card-title">
+        <h2 id="report-card-title">Forecast report card</h2>
+        <p class="muted small">Did the rule call the price direction better than a coin flip?</p>
+        <div class="report-grid" id="report-grid"></div>
+        <p class="muted small" id="report-note">Direction only: calling it right doesn’t mean the moves were big enough to beat costs. If you’ve tried several settings on this same date range, these odds no longer apply; confirm on a fresh range.</p>
+      </section>
+      <section class="panel" aria-labelledby="assets-title">
+        <h2 id="assets-title">Positions &amp; forecasts</h2>
+        <div id="assets" class="asset-cards"></div>
+      </section>
+      <section class="panel" aria-labelledby="ledger-title">
+        <h2 id="ledger-title">Activity</h2>
+        <label class="inline">Show<select id="ledger-filter"><option value="all">All</option><option value="trades">Trades</option><option value="decisions">Decisions</option></select></label>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Time (UTC)</th><th>Event</th><th>Asset</th><th>Detail</th><th class="numeric">Cash change</th></tr></thead>
+          <tbody id="ledger"></tbody>
+        </table></div>
+        <p class="muted small" id="ledger-note"></p>
+      </section>
+    </div>
+  </div>
+
+  <div id="history-view" hidden>
+    <section class="panel">
+      <h2>Run history <span class="muted" id="history-count"></span></h2>
+      <p class="muted small" id="history-status"></p>
+      <div class="actions">
+        <button type="button" id="history-export-all">Export all runs ↓</button>
+        <label class="file">Import saved run JSON<input id="run-file" type="file" accept="application/json"></label>
+      </div>
+    </section>
+    <div id="history"></div>
+  </div>
+
+  <p class="muted small">Minute candles cannot validate millisecond predictions. A profitable replay does not establish a reliable edge. Replay bid/ask is an assumed spread around candle closes, not archived order-book data.</p>
+</main>
+<script type="module" src="assets/main.js"></script>
+</body>
+</html>

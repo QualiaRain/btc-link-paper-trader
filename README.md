@@ -55,9 +55,21 @@ Local HTTP receipt time is quote availability time. The exchange ticker timestam
 
 Public snapshots do not establish executable orders. Latency, queue position, market impact, liquidity constraints, taxes and funding are not modeled. Millisecond trading is unsupported. A good historical run or a short live pilot does not prove future profit.
 
+## Python backend and TypeScript client (runs locally)
+
+The same app also exists as a Python backend (replay, forecasts, accounting and the report card behind a versioned `/v1` API) and a TypeScript frontend that calls it. It lives in `backend/`, `web/`, `contract/` and `parity/`, with deterministic parity tests against the JavaScript engine. The Pages app above is unchanged. GitHub Pages cannot host Python, and this version is **local only by design**: it has no login or rate limits, so it listens on 127.0.0.1 and should not be exposed.
+
+With Python 3.11+ and Node.js 22+:
+
+```sh
+scripts/run-local.sh
+```
+
+Then open `http://127.0.0.1:8000/` (set `PORT` for another port). The first run installs the backend into `.venv` and the web build tools into `web/node_modules`; later runs start in seconds. Saved runs persist in `.paper-trail-data/`. Stop with Ctrl+C. See [docs/BACKEND_MIGRATION.md](docs/BACKEND_MIGRATION.md) for architecture, the API and what remains.
+
 ## Local development
 
-No build or package installation is required:
+The original app needs no build or package installation:
 
 ```sh
 python3 -m http.server 8080 --bind 127.0.0.1

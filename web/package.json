@@ -1,0 +1,20 @@
+{
+  "name": "paper-trail-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeScript client and UI for the Python paper-trail API",
+  "scripts": {
+    "types": "openapi-typescript ../contract/openapi.json --default-non-nullable false -o src/api-types.ts",
+    "types:check": "openapi-typescript ../contract/openapi.json --default-non-nullable false -o .build/api-types.check.ts && diff -u src/api-types.ts .build/api-types.check.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && tsc -p tsconfig.json && node --test \".build/test/*.test.js\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "openapi-typescript": "7.13.0",
+    "playwright-core": "1.56.1",
+    "typescript": "5.9.3"
+  }
+}
