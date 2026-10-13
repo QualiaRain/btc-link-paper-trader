@@ -16,6 +16,8 @@ const fail = fn => { try { return {ok: fn()}; } catch (error) { return {error: e
 export function runAccount(scenario) {
   let account;
   try { account = createAccount(scenario.config ?? {}); } catch (error) { return {createError: error.message}; }
+  // Simulates an account saved before these settings existed (its frozen config lacks them).
+  for (const field of scenario.dropConfigFields ?? []) delete account.config[field];
   const errors = [];
   scenario.steps.forEach((step, index) => {
     try {
@@ -62,7 +64,10 @@ export function digest(account) {
     decisions: account.ledger.filter(e => e.type === 'decision' || e.type === 'decision_skipped').map(e => [e.id, e.time, e.asset, e.action ?? e.reason, e.expectedNetRatio ?? null]),
     forecasts: account.forecasts.map(f => [f.id, f.asset, f.status, f.issuedAt, f.targetAt, f.anchor, f.prediction, f.historyEnd, f.actual, f.latenessMs, f.absoluteError, f.baselineAbsoluteError]),
     equity: account.equity.filter((_, i) => i % 20 === 0 || i === account.equity.length - 1).map(p => [p.time, p.value, p.buyHoldValue]),
-    equityCount: account.equity.length};
+    equityCount: account.equity.length,
+    riskEvents: account.ledger.filter(e => e.type === 'risk_halt' || e.type === 'risk_resume'),
+    blockedDecisions: account.ledger.filter(e => e.blockedBy).map(e => [e.id, e.time, e.asset, e.blockedBy, e.wouldBuy]),
+    risk: account.risk ?? null, interest: account.interest ?? null};
 }
 
 async function describe(settings, account, dataset, compact = false) {

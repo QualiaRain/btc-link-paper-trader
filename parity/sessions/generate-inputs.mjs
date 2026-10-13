@@ -34,6 +34,8 @@ write('sample-sessions', [
     buy('BTC', 100), sell('BTC', 30), sell('LINK')]},
   {name: 'cash-exhausted', settings: sample({allocationFraction: 0, initialCash: 150, feeBps: 25, slippageBps: 5}, 4), actions: [
     buy('BTC', 100), buy('LINK', 100), buy('LINK', 100), buy('BTC', 1), frames(5), sell('BTC'), buy('BTC', 5e6), finish()]},
+  {name: 'risk-limits-and-cash-yield', settings: sample({maxDrawdownBps: 40, dailyLossBps: 25, cashYieldBps: 2000, bufferBps: 0, horizonMs: 300000}), actions: [
+    frames(60), buy('BTC', 50), frames(120), buy('BTC', 50), sell('BTC'), frames(240), buy('LINK', 50), frames(480), buy('BTC', 50), finish()]},
 ]);
 
 // Range-source sessions over synthetic closes with missing minutes (a gapped Coinbase-style candle series).
@@ -52,6 +54,8 @@ write('sample-sessions', [
       decision(), buy('BTC', 100), buy('LINK', 60), frames(4), sell('BTC', 50), sell('LINK'), buy('LINK', 100), decision(), frames(9), sell('BTC'), finish()]},
     {name: 'range-same-price-model', fullAccount: true, settings: range({model: 'same-price', horizonMs: 60000}, 1.5), candles: gapped, actions: [
       frames(3), buy('LINK', 80), decision(), sell('LINK', 20), finish()]},
+    {name: 'range-risk-limits-and-cash-yield', fullAccount: true, settings: range({maxDrawdownBps: 60, dailyLossBps: 45, cashYieldBps: 2000, bufferBps: 0}), candles: gapped, actions: [
+      decision(), buy('BTC', 200), frames(10), buy('LINK', 50), frames(10), buy('BTC', 50), decision(), frames(10), buy('BTC', 50), finish()]},
   ]);
 }
 console.log('session inputs written to', dir);

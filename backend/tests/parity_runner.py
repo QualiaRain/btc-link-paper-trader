@@ -16,6 +16,9 @@ def run_account(scenario: dict) -> dict:
         account = create_account(scenario.get("config") or {})
     except ValueError as error:
         return {"createError": str(error)}
+    # Simulates an account saved before these settings existed (its frozen config lacks them).
+    for field in scenario.get("dropConfigFields") or []:
+        account["config"].pop(field, None)
     errors = []
     for index, step in enumerate(scenario["steps"]):
         try:
@@ -62,7 +65,11 @@ def digest(account: dict) -> dict:
             "lastDecisionAt": account["lastDecisionAt"], "lastFrameAt": account["lastFrameAt"],
             "sequence": account["sequence"], "baseline": account["baseline"], "ledgerCounts": counts,
             "trades": trades, "decisions": decisions, "forecasts": forecasts, "equity": equity,
-            "equityCount": len(account["equity"])}
+            "equityCount": len(account["equity"]),
+            "riskEvents": [e for e in account["ledger"] if e["type"] in ("risk_halt", "risk_resume")],
+            "blockedDecisions": [[e["id"], e["time"], e["asset"], e["blockedBy"], e["wouldBuy"]]
+                                 for e in account["ledger"] if e.get("blockedBy")],
+            "risk": account.get("risk"), "interest": account.get("interest")}
 
 
 def _describe(settings: dict, account: dict, dataset: dict, compact: bool) -> dict:

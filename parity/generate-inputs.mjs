@@ -171,6 +171,11 @@ const write = (name, kind, scenarios) => writeFileSync(`${dir}${name}.json`, JSO
     range('2024-03-09T12:30:00', '2024-03-09T13:00'), range('2024-03-09T12:30-04:00', '2024-03-09T13:00'), range('', ''), range(undefined, undefined),
     range('2024-13-09T12:00', '2024-13-09T13:00'), range('2024-03-09T24:00', '2024-03-10T01:00'), range('2024-03-09T12:60', '2024-03-10T01:00'),
     range('2024-02-29T23:59', '2024-03-01T00:30'), range('2023-02-29T23:59', '2023-03-01T00:30'),
+    // Account risk limits and cash yield: valid extremes, one past each bound, wrong types.
+    {config: {maxDrawdownBps: 2500, dailyLossBps: 300, cashYieldBps: 450}}, {config: {maxDrawdownBps: 9999, dailyLossBps: 9999, cashYieldBps: 2000}},
+    {config: {maxDrawdownBps: 10000}}, {config: {maxDrawdownBps: -1}}, {config: {dailyLossBps: 9999.5}}, {config: {dailyLossBps: null}},
+    {config: {cashYieldBps: 2000.5}}, {config: {cashYieldBps: -0.01}}, {config: {cashYieldBps: '100'}}, {config: {maxDrawdownBps: true}},
+    {account: {config: {maxDrawdownBps: 75, cashYieldBps: 12.5}}},
   ]}]);
 }
 // 7. Canonical JSON / evidence hashing.
@@ -188,6 +193,8 @@ write('sample-replay', 'sample-replay', [
   {name: 'costly-with-stop-loss', settings: {config: {feeBps: 25, slippageBps: 10, bufferBps: 5, stopLossBps: 120, allocationFraction: .4, horizonMs: 3600000}, replay: {halfSpreadBps: 6}}},
   {name: 'one-minute-horizon-lookback-1', settings: {config: {horizonMs: 60000, lookbackIntervals: 1, bufferBps: 0}}},
   {name: 'day-horizon-max-lookback', settings: {config: {horizonMs: 86400000, lookbackIntervals: 240}}},
+  {name: 'risk-limits-and-cash-yield', settings: {config: {maxDrawdownBps: 40, dailyLossBps: 25, cashYieldBps: 2000, bufferBps: 0, horizonMs: 300000}}},
+  {name: 'cash-yield-only', settings: {config: {cashYieldBps: 500, horizonMs: 3600000, lookbackIntervals: 20}}},
 ]);
 // 9. Date-range replays: gaps, per-asset causal warmup, missing boundaries.
 {
@@ -211,6 +218,63 @@ write('sample-replay', 'sample-replay', [
     {name: 'missing-exact-start-rejected', settings: settings(), candles: {...full(), LINK: full().LINK.filter(c => c.time !== start)}},
     {name: 'fees-spread-and-stop', settings: settings({feeBps: 30, slippageBps: 8, bufferBps: 0, stopLossBps: 90, horizonMs: 900000}, 5), candles: full()},
     {name: 'range-shorter-than-horizon-rejected', settings: settings({horizonMs: 3600000}, 2, start, start + 30 * M), candles: full()},
+    {name: 'risk-limits-and-cash-yield', settings: settings({maxDrawdownBps: 30, dailyLossBps: 20, cashYieldBps: 1500, bufferBps: 0}), candles: gappy},
+  ]);
+}
+// 10. Account risk limits: drawdown halts for the session, daily loss halts until the next UTC day, manual buys refused.
+{
+  const up = walk(101, 60, 50000, .002, .0012), upL = walk(102, 60, 20, .003, .001);
+  const drop = (series, at, factor) => [...series.slice(0, at), ...series.slice(at).map(p => Math.round(p * factor * 1e4) / 1e4)];
+  const crash = frames(drop(up, 12, .97), drop(upL, 12, .97));
+  // Starts at 23:40 UTC on 2024-01-01; the crash comes at 23:52, midnight is frame 20.
+  const night = frames(drop(up, 12, .97), drop(upL, 12, .97), {t0: T0 - 20 * M});
+  const twoDrops = frames(drop(drop(up, 12, .97), 30, .97), drop(drop(upL, 12, .97), 30, .97), {t0: T0 - 20 * M});
+  const run = (name, config, fs, extra = {}) => ({name, config: {horizonMs: 300000, lookbackIntervals: 3, bufferBps: 0, durationMs: 50 * M, ...config}, steps: ingestAll(fs), ...extra});
+  const at = (fs, i) => structuredClone(fs[i]);
+  write('risk-limits', 'account', [
+    run('no-limits-configured-no-risk-state', {}, crash),
+    run('drawdown-halts-for-the-session', {maxDrawdownBps: 150}, crash),
+    run('drawdown-limit-not-reached', {maxDrawdownBps: 500}, crash),
+    run('daily-loss-resumes-next-utc-day', {dailyLossBps: 100}, night),
+    run('daily-loss-resumes-after-gap-over-midnight', {dailyLossBps: 100}, [...night.slice(0, 17), ...night.slice(26)]),
+    run('daily-loss-twice-on-separate-days', {dailyLossBps: 100}, twoDrops),
+    run('drawdown-wins-when-both-breach', {maxDrawdownBps: 150, dailyLossBps: 100}, night),
+    run('daily-loss-then-drawdown-later', {maxDrawdownBps: 400, dailyLossBps: 100}, twoDrops),
+    {name: 'manual-buys-refused-while-halted', config: {model: 'same-price', horizonMs: 3600000, maxDrawdownBps: 9999, dailyLossBps: 100, allocationFraction: 0, durationMs: 50 * M}, steps: [
+      {op: 'manual', asset: 'BTC', side: 'buy', dollars: 500, frame: at(night, 0)}, {op: 'manual', asset: 'LINK', side: 'buy', dollars: 500, frame: at(night, 1)},
+      ...ingestAll(night.slice(2, 13)), {op: 'manual', asset: 'BTC', side: 'buy', dollars: 10, frame: at(night, 13)},
+      {op: 'manual', asset: 'LINK', side: 'sell', dollars: 10, frame: at(night, 13)}, ...ingestAll(night.slice(14, 20)),
+      {op: 'manual', asset: 'BTC', side: 'buy', dollars: 10, frame: at(night, 20)}, ...ingestAll(night.slice(21, 30))]},
+    {name: 'manual-buy-refused-after-drawdown', config: {model: 'same-price', horizonMs: 3600000, maxDrawdownBps: 100, allocationFraction: 0, durationMs: 50 * M}, steps: [
+      {op: 'manual', asset: 'BTC', side: 'buy', dollars: 900, frame: at(crash, 0)}, ...ingestAll(crash.slice(1, 13)),
+      {op: 'manual', asset: 'BTC', side: 'buy', dollars: 10, frame: at(crash, 13)}, ...ingestAll(crash.slice(14, 40)),
+      {op: 'manual', asset: 'LINK', side: 'buy', dollars: 10, frame: at(crash, 40)}]},
+    run('saved-before-limits-runs-without-them', {maxDrawdownBps: 150, dailyLossBps: 100, cashYieldBps: 2000}, night,
+      {dropConfigFields: ['maxDrawdownBps', 'dailyLossBps', 'cashYieldBps']}),
+    {name: 'limit-out-of-range-throws', config: {maxDrawdownBps: 10000}, steps: []},
+  ]);
+}
+// 11. Cash yield: continuous compounding of idle cash over elapsed time (gaps included), stopping at completion.
+{
+  const H = 60 * M, btc = walk(111, 30, 45000, .01, .002), link = walk(112, 30, 15, .015, .001);
+  const hourly = frames(btc, link, {step: H});
+  const damaged = hourly.map((f, i) => { const g = structuredClone(f); if (i === 5 || i === 6) g.quotes = null; return g; });
+  const run = (name, config, fs, extra = {}) => ({name, config: {horizonMs: H, lookbackIntervals: 3, bufferBps: 0, durationMs: 20 * H, ...config}, steps: ingestAll(fs), ...extra});
+  const minute = frames(walk(113, 40, 42000, .004, .0004), walk(114, 40, 18.5, .008, .0003));
+  write('cash-yield', 'account', [
+    run('max-yield-hourly-with-completion', {cashYieldBps: 2000}, hourly),
+    run('yield-over-unobserved-gap', {cashYieldBps: 1000}, [...hourly.slice(0, 7), ...hourly.slice(12)]),
+    run('invalid-frames-do-not-reset-the-clock', {cashYieldBps: 1000}, damaged),
+    run('quarter-allocation-keeps-more-cash-earning', {cashYieldBps: 2000, allocationFraction: .25}, hourly),
+    run('yield-with-stop-loss-and-drawdown', {cashYieldBps: 750, stopLossBps: 60, maxDrawdownBps: 60}, hourly),
+    run('zero-yield-default', {}, hourly),
+    run('saved-before-yield', {cashYieldBps: 2000}, hourly, {dropConfigFields: ['cashYieldBps']}),
+    {name: 'yield-with-manual-orders', config: {model: 'same-price', cashYieldBps: 1500, allocationFraction: 0, durationMs: 20 * H}, steps: [
+      {op: 'manual', asset: 'BTC', side: 'buy', dollars: 300, frame: structuredClone(hourly[0])}, ...ingestAll(hourly.slice(1, 4)),
+      {op: 'manual', asset: 'BTC', side: 'sell', dollars: 1e9, frame: structuredClone(hourly[6])}, ...ingestAll(hourly.slice(7, 25))]},
+    {name: 'live-yield-with-gap', config: {mode: 'live', cashYieldBps: 2000, horizonMs: 300000, lookbackIntervals: 3, durationMs: 60 * M},
+      steps: ingestAll([...minute.slice(0, 15), ...minute.slice(23, 40)])},
+    {name: 'yield-above-maximum-throws', config: {cashYieldBps: 2001}, steps: []},
   ]);
 }
 console.log('inputs written to', dir);

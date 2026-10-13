@@ -47,8 +47,8 @@ def diff(expected, actual, path="$"):
 
 
 def test_inputs_and_goldens_are_present():
-    assert CASES == ["canonical", "chronology", "fees-slippage", "missing-quotes", "positions",
-                     "range-replay", "sample-replay", "settings", "warmup"]
+    assert CASES == ["canonical", "cash-yield", "chronology", "fees-slippage", "missing-quotes", "positions",
+                     "range-replay", "risk-limits", "sample-replay", "settings", "warmup"]
 
 
 @pytest.mark.parametrize("name", CASES)
@@ -84,3 +84,24 @@ def test_goldens_exercise_the_cases_they_claim():
     assert sum("error" in x for x in scenarios("settings")["normalize"]) > 20
     range_cases = scenarios("range-replay")
     assert sum("error" in v for v in range_cases.values()) >= 4 and sum("summary" in v for v in range_cases.values()) >= 5
+
+    risk = scenarios("risk-limits")
+    halted = risk["drawdown-halts-for-the-session"]
+    assert halted["summary"]["tradingHalted"] == "max_drawdown" and halted["summary"]["riskHalts"] == 1
+    assert any(e.get("blockedBy") == "max_drawdown" and e["wouldBuy"] for e in halted["account"]["ledger"])
+    daily = risk["daily-loss-resumes-next-utc-day"]
+    assert {"risk_halt", "risk_resume"} <= types(daily) and daily["summary"]["tradingHalted"] is None
+    assert [e["limit"] for e in risk["daily-loss-then-drawdown-later"]["account"]["ledger"]
+            if e["type"] == "risk_halt"] == ["daily_loss", "max_drawdown"]
+    assert any(e["message"].startswith("Daily loss limit reached") for e in risk["manual-buys-refused-while-halted"]["errors"])
+    assert any(e["message"].startswith("Drawdown limit reached") for e in risk["manual-buy-refused-after-drawdown"]["errors"])
+    assert "risk" not in risk["no-limits-configured-no-risk-state"]["account"]
+    assert "risk" not in risk["saved-before-limits-runs-without-them"]["account"]
+    assert not any("blockedBy" in e for e in risk["no-limits-configured-no-risk-state"]["account"]["ledger"])
+    yields = scenarios("cash-yield")
+    assert yields["max-yield-hourly-with-completion"]["summary"]["interestEarned"] > 0
+    assert yields["max-yield-hourly-with-completion"]["summary"]["cashBenchmark"] > 1000
+    assert "interest" not in yields["zero-yield-default"]["account"]
+    assert yields["saved-before-yield"]["summary"]["cashBenchmark"] == 1000
+    assert scenarios("sample-replay")["risk-limits-and-cash-yield"]["summary"]["riskHalts"] > 0
+    assert range_cases["risk-limits-and-cash-yield"]["summary"]["riskHalts"] > 0
