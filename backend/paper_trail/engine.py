@@ -451,6 +451,36 @@ def _avg(xs: list[dict], key: str) -> float | None:
     return total / len(xs)
 
 
+# Per-asset summary counts added with the forecast report card (report-card.js grades them).
+REPORT_CARD_COUNTS = ("directionHits", "directionMisses", "directionFlat", "modelCloser", "samePriceCloser", "ties")
+
+
+# Per settled forecast: whether the predicted direction matched the observed one
+# (flat predictions or outcomes are excluded), and which forecast landed nearer
+# the outcome, the model's or the same-price baseline's (equal errors are ties).
+def _forecast_counts(fs: list[dict]) -> dict[str, int]:
+    direction_hits = direction_misses = direction_flat = model_closer = same_price_closer = ties = 0
+    for f in fs:
+        eps = 1e-12 * max(1, f["anchor"])
+        predicted = f["prediction"] - f["anchor"]
+        observed = f["actual"] - f["anchor"]
+        if abs(predicted) <= eps or abs(observed) <= eps:
+            direction_flat += 1
+        elif (predicted > 0) == (observed > 0):  # Math.sign equality; both are nonzero here
+            direction_hits += 1
+        else:
+            direction_misses += 1
+        d = f["baselineAbsoluteError"] - f["absoluteError"]
+        if abs(d) <= eps:
+            ties += 1
+        elif d > 0:
+            model_closer += 1
+        else:
+            same_price_closer += 1
+    return {"directionHits": direction_hits, "directionMisses": direction_misses, "directionFlat": direction_flat,
+            "modelCloser": model_closer, "samePriceCloser": same_price_closer, "ties": ties}
+
+
 def get_summary(a: dict) -> dict[str, Any]:
     last = a["equity"][-1] if a["equity"] else None
     initial = a["config"]["initialCash"]
@@ -473,7 +503,8 @@ def get_summary(a: dict) -> dict[str, Any]:
     for s in ASSETS:
         fs = [f for f in done if f["asset"] == s]
         per_asset[s] = {"count": len(fs), "mae": _avg(fs, "absoluteError"),
-                        "samePriceMae": _avg(fs, "baselineAbsoluteError"), "qty": a["positions"][s]["qty"]}
+                        "samePriceMae": _avg(fs, "baselineAbsoluteError"), **_forecast_counts(fs),
+                        "qty": a["positions"][s]["qty"]}
     return {
         "status": a["status"], "equity": equity, "cash": a["cash"],
         "returnPct": 100 * (equity / initial - 1), "buyHoldEquity": hold,

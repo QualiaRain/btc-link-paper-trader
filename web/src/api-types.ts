@@ -415,12 +415,42 @@ export interface components {
         AssetSummary: {
             /** Count */
             count: number;
+            /**
+             * Directionflat
+             * @description Settled forecasts with a flat prediction or a flat outcome (within 1e-12 of the anchor, relative to max(1, anchor)). Absent in summaries saved before the forecast report card existed (null where such a summary is listed).
+             */
+            directionFlat?: number | null;
+            /**
+             * Directionhits
+             * @description Settled forecasts whose predicted direction matched the observed one (flat predictions or outcomes excluded). Absent in summaries saved before the forecast report card existed (null where such a summary is listed).
+             */
+            directionHits?: number | null;
+            /**
+             * Directionmisses
+             * @description Settled forecasts whose predicted direction was wrong. Absent in summaries saved before the forecast report card existed (null where such a summary is listed).
+             */
+            directionMisses?: number | null;
             /** Mae */
             mae: number | null;
+            /**
+             * Modelcloser
+             * @description Settled forecasts where the rule's prediction landed nearer the outcome than the same-price baseline. Absent in summaries saved before the forecast report card existed (null where such a summary is listed).
+             */
+            modelCloser?: number | null;
             /** Qty */
             qty: number;
+            /**
+             * Samepricecloser
+             * @description Settled forecasts where the same-price baseline landed nearer. Absent in summaries saved before the forecast report card existed (null where such a summary is listed).
+             */
+            samePriceCloser?: number | null;
             /** Samepricemae */
             samePriceMae: number | null;
+            /**
+             * Ties
+             * @description Settled forecasts where both errors were equal (within the same tolerance). Absent in summaries saved before the forecast report card existed (null where such a summary is listed).
+             */
+            ties?: number | null;
         };
         /** Baseline */
         Baseline: {

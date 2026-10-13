@@ -199,6 +199,42 @@
             "title": "Count",
             "type": "integer"
           },
+          "directionFlat": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts with a flat prediction or a flat outcome (within 1e-12 of the anchor, relative to max(1, anchor)). Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Directionflat"
+          },
+          "directionHits": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts whose predicted direction matched the observed one (flat predictions or outcomes excluded). Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Directionhits"
+          },
+          "directionMisses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts whose predicted direction was wrong. Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Directionmisses"
+          },
           "mae": {
             "anyOf": [
               {
@@ -210,9 +246,33 @@
             ],
             "title": "Mae"
           },
+          "modelCloser": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts where the rule's prediction landed nearer the outcome than the same-price baseline. Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Modelcloser"
+          },
           "qty": {
             "title": "Qty",
             "type": "number"
+          },
+          "samePriceCloser": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts where the same-price baseline landed nearer. Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Samepricecloser"
           },
           "samePriceMae": {
             "anyOf": [
@@ -224,6 +284,18 @@
               }
             ],
             "title": "Samepricemae"
+          },
+          "ties": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settled forecasts where both errors were equal (within the same tolerance). Absent in summaries saved before the forecast report card existed (null where such a summary is listed).",
+            "title": "Ties"
           }
         },
         "required": [

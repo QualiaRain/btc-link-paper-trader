@@ -105,3 +105,18 @@ def test_goldens_exercise_the_cases_they_claim():
     assert yields["saved-before-yield"]["summary"]["cashBenchmark"] == 1000
     assert scenarios("sample-replay")["risk-limits-and-cash-yield"]["summary"]["riskHalts"] > 0
     assert range_cases["risk-limits-and-cash-yield"]["summary"]["riskHalts"] > 0
+
+    # Forecast report card counts: every branch occurs, and they partition the settled forecasts.
+    sample = scenarios("sample-replay")
+    trend = sample["defaults"]["summary"]["perAsset"]
+    for per in trend.values():
+        assert per["directionHits"] > 0 and per["directionMisses"] > 0
+        assert per["modelCloser"] > 0 and per["samePriceCloser"] > 0
+        assert per["directionHits"] + per["directionMisses"] + per["directionFlat"] == per["count"]
+        assert per["modelCloser"] + per["samePriceCloser"] + per["ties"] == per["count"]
+    for per in sample["same-price-model"]["summary"]["perAsset"].values():
+        assert per["count"] > 0 and per["directionFlat"] == per["ties"] == per["count"]
+    everything = [per for name in CASES if name not in ("settings", "canonical") for scenario in scenarios(name).values()
+                  if "summary" in scenario for per in scenario["summary"]["perAsset"].values()]
+    assert any(0 < per["directionFlat"] < per["count"] for per in everything), "a flat outcome under a trend forecast"
+

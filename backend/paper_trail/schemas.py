@@ -181,10 +181,24 @@ class Account(BaseModel):
     interest: float | None = Field(None, description="Cash yield earned so far; present once any interest accrues.")
 
 
+_SAVED_BEFORE_REPORT_CARD = " Absent in summaries saved before the forecast report card existed (null where such a summary is listed)."
+
+
 class AssetSummary(BaseModel):
     count: int
     mae: float | None
     samePriceMae: float | None
+    directionHits: int | None = Field(None, description="Settled forecasts whose predicted direction matched the observed one "
+                                      "(flat predictions or outcomes excluded)." + _SAVED_BEFORE_REPORT_CARD)
+    directionMisses: int | None = Field(None, description="Settled forecasts whose predicted direction was wrong." + _SAVED_BEFORE_REPORT_CARD)
+    directionFlat: int | None = Field(None, description="Settled forecasts with a flat prediction or a flat outcome "
+                                      "(within 1e-12 of the anchor, relative to max(1, anchor))." + _SAVED_BEFORE_REPORT_CARD)
+    modelCloser: int | None = Field(None, description="Settled forecasts where the rule's prediction landed nearer the outcome "
+                                    "than the same-price baseline." + _SAVED_BEFORE_REPORT_CARD)
+    samePriceCloser: int | None = Field(None, description="Settled forecasts where the same-price baseline landed nearer."
+                                        + _SAVED_BEFORE_REPORT_CARD)
+    ties: int | None = Field(None, description="Settled forecasts where both errors were equal (within the same tolerance)."
+                             + _SAVED_BEFORE_REPORT_CARD)
     qty: float
 
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .canonical import canonical_json, js_copy, sha256_canonical
-from .engine import create_account, get_summary, iso
+from .engine import ASSETS, REPORT_CARD_COUNTS, create_account, get_summary, iso
 
 RUN_FORMAT = "paper-trail-run-v2"
 HASH_ALGORITHM = "SHA-256 / canonical JSON"
@@ -203,6 +203,14 @@ def verify_imported_record(record: Any) -> dict[str, Any]:
             for key in ("riskHalts", "tradingHalted", "interestEarned"):
                 if key not in record["summary"]:
                     recomputed.pop(key)
+        # Summaries saved before the forecast report card existed have none of its per-asset counts. The counts
+        # depend on the forecasts alone (no config marks the era), so a summary may omit them only all together:
+        # every count for every asset. Any partial omission is compared as is and fails.
+        stored_assets = record["summary"]["perAsset"]
+        if not any(key in stored_assets[asset] for asset in ASSETS for key in REPORT_CARD_COUNTS):
+            for asset in ASSETS:
+                for key in REPORT_CARD_COUNTS:
+                    recomputed["perAsset"][asset].pop(key)
     except ValidationError as error:
         first = error.errors()[0]
         raise ValueError(f"Run record is malformed at {'.'.join(str(p) for p in first['loc'])}: {first['msg']}") from None
