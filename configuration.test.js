@@ -4,7 +4,7 @@ import {normalizeSettings,utcMinute} from './configuration.js';
 
 test('settings round trip keeps every chosen rule and UTC replay boundary without mutation',()=>{
   const input={config:{mode:'replay',initialCash:2500,horizonMs:300000,model:'trend',lookbackIntervals:23,
-    bufferBps:42,allocationFraction:.3,stopLossBps:180,feeBps:12,slippageBps:5,durationMs:7200000,
+    bufferBps:42,allocationFraction:.3,stopLossBps:180,maxDrawdownBps:900,dailyLossBps:300,cashYieldBps:425,feeBps:12,slippageBps:5,durationMs:7200000,
     maxQuoteAgeMs:60000,maxOutcomeLatenessMs:30000},replay:{source:'range',start:'2026-10-09T12:00',end:'2026-10-09T13:00',halfSpreadBps:3.5}};
   const before=structuredClone(input),settings=normalizeSettings(input);
   assert.deepEqual(input,before);
@@ -17,6 +17,9 @@ test('settings typos and numeric strings fail instead of silently using defaults
   assert.throws(()=>normalizeSettings({config:{initialCash:'1000'}}),/initialCash/);
   assert.throws(()=>normalizeSettings({config:{allocationFraction:.51}}),/allocationFraction/);
   assert.throws(()=>normalizeSettings({config:{lookbackIntervals:1.5}}),/lookbackIntervals/);
+  assert.throws(()=>normalizeSettings({config:{maxDrawdownBps:-1}}),/maxDrawdownBps/);
+  assert.throws(()=>normalizeSettings({config:{dailyLossBps:10000}}),/dailyLossBps/);
+  assert.throws(()=>normalizeSettings({config:{cashYieldBps:2001}}),/cashYieldBps/);
   assert.throws(()=>normalizeSettings({config:{horizonMs:1234}}),/supported forecast horizons/);
   assert.throws(()=>normalizeSettings({config:{},replay:{halfSpreadBps:-1}}),/half-spread/);
 });

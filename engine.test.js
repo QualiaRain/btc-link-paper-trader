@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createAccount,ingest,manualTrade,getSummary} from './engine.js';
+import {createAccount as create,ingest,manualTrade,getSummary} from './engine.js';
+// Mechanics below were written for 10 bps fees; the app default is a realistic retail rate.
+const createAccount=(config={})=>create({feeBps:10,...config});
 const T=1700000000000;
 function frame(time=T,price=100,trend=.001) {
   const q={bid:price-.1,ask:price+.1,mid:price,observedAt:time,source:'fixture'};
@@ -122,4 +124,12 @@ test('stop prevents automatic and manual same-frame reentry',()=>{
   near(a.positions.BTC.qty,0);assert.ok(a.ledger.some(e=>e.type==='decision_skipped'&&e.reason.includes('same-frame')));
   assert.throws(()=>manualTrade(a,'BTC','buy',10,f),/same frame/);
   const b=createAccount({stopLossBps:0});ingest(b,frame());ingest(b,frame(T+1000,50));assert.ok(b.positions.BTC.qty>0);
+});
+
+test('default fee is the cheapest verified retail taker rate, charged on both fills',()=>{
+  const a=create(),f=frame();ingest(a,f);
+  assert.equal(a.config.feeBps,2);
+  manualTrade(a,'BTC','buy',1000,f);
+  // Ask+slippage+2 bps fee in, bid-slippage-2 bps fee out (this fixture's half-spread is 10 bps).
+  near(getSummary(a).equity,1000*(99.9*.9998*.9998)/(100.1*1.0002*1.0002));
 });
