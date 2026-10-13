@@ -266,15 +266,19 @@ export function manualTrade(a,asset,side,dollars,frame) {
   a.lastFrameAt=frame.time;a.lastValidFrameAt=frame.time;return a;
 }
 
-// Which settled forecast landed nearer the outcome: the model or the same-price baseline.
-// Equal errors (including a zero-drift forecast) count as ties.
-function closerCounts(fs) {
-  let modelCloser=0,samePriceCloser=0,ties=0;
+// Per settled forecast: whether the predicted direction matched the observed one
+// (flat predictions or outcomes are excluded), and which forecast landed nearer
+// the outcome, the model's or the same-price baseline's (equal errors are ties).
+function forecastCounts(fs) {
+  let directionHits=0,directionMisses=0,directionFlat=0,modelCloser=0,samePriceCloser=0,ties=0;
   for (const f of fs) {
+    const eps=1e-12*Math.max(1,f.anchor),predicted=f.prediction-f.anchor,observed=f.actual-f.anchor;
+    if (Math.abs(predicted)<=eps||Math.abs(observed)<=eps) directionFlat++;
+    else if (Math.sign(predicted)===Math.sign(observed)) directionHits++; else directionMisses++;
     const d=f.baselineAbsoluteError-f.absoluteError;
-    if (Math.abs(d)<=1e-12*Math.max(1,f.actual)) ties++; else if (d>0) modelCloser++; else samePriceCloser++;
+    if (Math.abs(d)<=eps) ties++; else if (d>0) modelCloser++; else samePriceCloser++;
   }
-  return {modelCloser,samePriceCloser,ties};
+  return {directionHits,directionMisses,directionFlat,modelCloser,samePriceCloser,ties};
 }
 
 export function getSummary(a) {
@@ -292,7 +296,7 @@ export function getSummary(a) {
     expiredForecasts:a.forecasts.filter(f=>f.status==='expired').length,
     mae:avg(done,'absoluteError'),samePriceMae:avg(done,'baselineAbsoluteError'),
     perAsset:Object.fromEntries(ASSETS.map(s=>{const fs=done.filter(f=>f.asset===s);return [s,{count:fs.length,
-      mae:avg(fs,'absoluteError'),samePriceMae:avg(fs,'baselineAbsoluteError'),...closerCounts(fs),qty:a.positions[s].qty}];})),
+      mae:avg(fs,'absoluteError'),samePriceMae:avg(fs,'baselineAbsoluteError'),...forecastCounts(fs),qty:a.positions[s].qty}];})),
     riskHalts:a.ledger.filter(e=>e.type==='risk_halt').length,tradingHalted:haltReason(a),
     valuationAt:last?.time??null,valuationIsNetLiquidation:true};
 }
