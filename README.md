@@ -2,7 +2,7 @@
 
 A browser-local BTC/LINK paper-trading experiment with configurable rules, historical replay, live public quotes and exportable run history. The default balance is **$1,000 simulated cash**. No wallet, exchange credentials or real orders are involved.
 
-**[Open the app](https://qualiarain.github.io/btc-link-paper-trader/)** · [Source](https://github.com/QualiaRain/btc-link-paper-trader)
+**[Open the app](https://qualiarain.github.io/btc-link-paper-trader/)** · [Source](https://github.com/QualiaRain/btc-link-paper-trader) · [How this was built](docs/HOW_THIS_WAS_BUILT.md)
 
 ## Configure and run
 
