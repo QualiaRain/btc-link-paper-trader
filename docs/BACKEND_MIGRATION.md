@@ -14,6 +14,7 @@ validate millisecond predictions, and a profitable replay does not establish a r
 | --- | --- |
 | Python engine, settings, replay (sample + UTC range), run records, run history, exports | Done, JS-parity tested |
 | Account risk limits (`maxDrawdownBps`, `dailyLossBps`), idle cash yield (`cashYieldBps`), 2 bps fee / 3 bps half-spread defaults (main PR #5) | Done, JS-parity tested (`risk-limits`, `cash-yield` and session scenarios) and in the UI |
+| Forecast report card (per-asset direction and closer-than-no-change counts, main PR #6) and settle without rescanning finished forecasts (main PR #7) | Done, JS-parity tested (all goldens plus a `settle` stale-quote scenario); report card in the Run view, checked against the root `report-card.js` |
 | Stepwise sessions (advance by frames / next decision / finish), manual paper orders, stale-action and run-ownership protection | Done, JS-parity + real API/browser tests |
 | Server-side candle retrieval (retries, receipts, cancellation, progress) and candle jobs | Done, tested against the existing JS and a loopback server |
 | Browser-format run evidence (packed history catalog, last observed frame, matching `marketSha256`) | Done for sample and fetched runs; verified with the real `history.js` |
@@ -98,7 +99,8 @@ Regenerate after changing the API: `python -m paper_trail.contract` (in `backend
 Seeded, clock-free inputs are run through the **existing** JS modules to produce goldens, and Python must reproduce them
 (exact for integers/strings/structure; floats within 1e-12 relative, though Python currently matches bit for bit).
 Areas: base accounting and settings (chronology, missing/stale/crossed quotes, outcome expiry, warmup, fees/slippage,
-positions, stop loss, risk limits, cash yield, canonical hashing, sample and range replays), `sessions/` (13 scenarios), `candles/` (retrieval with
+positions, stop loss, risk limits, cash yield, report card counts, settlement with stale quotes, canonical hashing, sample and
+range replays), `sessions/` (13 scenarios), `candles/` (retrieval with
 stubbed `fetch`: retries, errors, gaps, boundaries), `evidence/` (packing and hashes), `live/` (24 fetch + 6 session
 scenarios with stubbed `fetch` and `Date.now`). A JS freshness test per area fails if a golden stops matching the JS, and
 exact-boundary cases make off-by-one regressions fail. Frontend tests compare the UI and API with an independent oracle
@@ -116,6 +118,21 @@ benchmark grows at the same rate (`account.interest`, `summary.interestEarned`).
 `tradingHalted`. Accounts saved before these fields have none of the config keys and run without limits or yield; imports
 accept a stored summary without the new fields only when the recomputed values are the neutral ones (0 / null), so older
 browser exports still import.
+
+## Forecast report card and settlement
+
+Ported from `engine.js` (`forecastCounts`) and `report-card.js`. Each `summary.perAsset[asset]` carries `directionHits`,
+`directionMisses`, `directionFlat`, `modelCloser`, `samePriceCloser` and `ties` (flat or tied within
+`1e-12 * max(1, anchor)`). The Run view grades them with `web/src/report-card.ts` (exact two-sided sign test, at least 30
+decided forecasts, p < 0.025 per asset) using the app's wording; a TS test compares it with the root module over every
+branch, and the browser tests compare the panel with the root module. Summaries saved before the report card have none
+of the counts: imports accept that only when every count is missing for both assets (no config marks that era), and the
+UI shows such a row as "Not graded" instead of grading zeros.
+
+Settlement starts at the first forecast that may still be pending and stops at the first future target, like
+`engine.js`. The start index is kept on the account object (a dict subclass slot), never as a JSON item, so accounts,
+records and API responses are unchanged; accounts restored from JSON scan from the first forecast. A 10,000-frame
+one-minute-horizon run settles in about 0.9 s instead of 11 s.
 
 ## Saved runs and exports
 
@@ -147,7 +164,8 @@ hashes): someone who edits the account and recomputes the summary passes (a test
 * Partial session snapshots omit later frames and raw candle rows (causality); the browser keeps them.
 * `live.py` reimplements `Date.parse` for ISO timestamps only, and reports invalid JSON as "Invalid JSON response" rather than V8's text.
 * Coverage `missingTimes` in candle jobs is capped at 500 per asset (`missingTimesTruncated` marks it).
-* Layout and wording of the new UI are not pixel-matched to the original.
+* Layout and wording of the new UI are not pixel-matched to the original (the report card uses the app's wording).
+* The report card shows "Not graded" for a saved summary without direction counts; the browser app recomputes summaries, so it never meets one.
 
 ## GitHub Pages constraint
 
