@@ -75,3 +75,24 @@ def test_missing_summary_fields_are_accepted_only_when_the_feature_was_unused():
     del record["summary"]["interestEarned"]  # interest was earned, so its absence is a mismatch
     with pytest.raises(ValueError, match="summary does not match"):
         verify_imported_record(record)
+
+
+def test_legacy_omissions_cannot_hide_new_account_state(browser_completed):
+    import copy
+    for state in ({"interest": 1}, {"risk": {"peakValue": 1000, "dayStart": None, "dayOpenValue": None,
+                                           "killedAt": None, "haltedUntil": None}}):
+        altered = copy.deepcopy(browser_completed)
+        altered["account"].update(state)
+        with pytest.raises(ValueError, match="Legacy rules cannot contain risk or interest state"):
+            verify_imported_record(altered)
+
+
+def test_new_config_cannot_omit_new_summary_fields():
+    import copy
+    account, _ = run_replay(normalize_settings({"config": {}}))
+    record = make_run_record(account, {"kind": "sample"}, run_id="new-summary")
+    for key in ("interestEarned", "riskHalts", "tradingHalted"):
+        altered = copy.deepcopy(record)
+        altered["summary"].pop(key)
+        with pytest.raises(ValueError, match="summary does not match"):
+            verify_imported_record(altered)

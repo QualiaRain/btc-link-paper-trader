@@ -5,8 +5,8 @@
   "type": "module",
   "description": "TypeScript client and UI for the Python paper-trail API",
   "scripts": {
-    "types": "openapi-typescript ../contract/openapi.json -o src/api-types.ts",
-    "types:check": "openapi-typescript ../contract/openapi.json -o .build/api-types.check.ts && diff -u src/api-types.ts .build/api-types.check.ts",
+    "types": "openapi-typescript ../contract/openapi.json --default-non-nullable false -o src/api-types.ts",
+    "types:check": "openapi-typescript ../contract/openapi.json --default-non-nullable false -o .build/api-types.check.ts && diff -u src/api-types.ts .build/api-types.check.ts",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "build": "tsc -p tsconfig.json",
     "test": "tsc -p tsconfig.test.json && tsc -p tsconfig.json && node --test \".build/test/*.test.js\""

@@ -397,7 +397,7 @@ export interface components {
              * @description Only used by mode `frames`.
              * @default 1
              */
-            count: number;
+            count?: number;
             /** Expectedversion */
             expectedVersion: number;
             /**
@@ -476,13 +476,13 @@ export interface components {
              * @description Sizes the causal warmup window like the browser app.
              * @default 7
              */
-            lookbackIntervals: number;
+            lookbackIntervals?: number;
             /**
              * Model
              * @default trend
              * @enum {string}
              */
-            model: "trend" | "same-price";
+            model?: "trend" | "same-price";
             /**
              * Start
              * @description UTC minute `YYYY-MM-DDTHH:MM` (inclusive scored start).
@@ -515,13 +515,13 @@ export interface components {
              * @description Absent in accounts saved before cash yield existed (no yield).
              * @default 0
              */
-            cashYieldBps: number;
+            cashYieldBps?: number;
             /**
              * Dailylossbps
              * @description Absent in accounts saved before risk limits existed (no limit).
              * @default 0
              */
-            dailyLossBps: number;
+            dailyLossBps?: number;
             /** Durationms */
             durationMs: number;
             /** Feebps */
@@ -537,7 +537,7 @@ export interface components {
              * @description Absent in accounts saved before risk limits existed (no limit).
              * @default 0
              */
-            maxDrawdownBps: number;
+            maxDrawdownBps?: number;
             /** Maxoutcomelatenessms */
             maxOutcomeLatenessMs: number;
             /** Maxquoteagems */
@@ -723,7 +723,7 @@ export interface components {
              * @default false
              * @constant
              */
-            realTrading: false;
+            realTrading?: false;
             /**
              * Status
              * @constant
@@ -1138,7 +1138,7 @@ export interface components {
              * @description Absent in summaries saved before cash yield existed.
              * @default 0
              */
-            interestEarned: number;
+            interestEarned?: number;
             /** Mae */
             mae: number | null;
             /** Maxdrawdownpct */
@@ -1153,7 +1153,7 @@ export interface components {
              * @description Number of `risk_halt` events. Absent in summaries saved before risk limits existed.
              * @default 0
              */
-            riskHalts: number;
+            riskHalts?: number;
             /** Samepricemae */
             samePriceMae: number | null;
             /** Settledforecasts */

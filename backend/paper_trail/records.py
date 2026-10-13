@@ -169,10 +169,6 @@ def _close(a: Any, b: Any, tolerance: float = 1e-9) -> bool:
     return a == b
 
 
-# Summary fields added after records were first saved, with their value when the feature is unused.
-LATER_SUMMARY_FIELDS: dict[str, Any] = {"interestEarned": 0, "riskHalts": 0, "tradingHalted": None}
-
-
 def verify_imported_record(record: Any) -> dict[str, Any]:
     """Check a browser-exported run for corruption: structure, hashes and internal consistency.
 
@@ -200,16 +196,18 @@ def verify_imported_record(record: Any) -> dict[str, Any]:
         Account.model_validate(record["account"])
         Summary.model_validate(record["summary"])
         recomputed = get_summary(record["account"])
+        # Preserve old evidence and hashes; new records must include the new summary.
+        if not any(k in record["config"] for k in ("maxDrawdownBps", "dailyLossBps", "cashYieldBps")):
+            if record["account"].get("risk") or recomputed["interestEarned"] != 0 or recomputed["riskHalts"] != 0 or recomputed["tradingHalted"] is not None:
+                raise ValueError("Legacy rules cannot contain risk or interest state")
+            for key in ("riskHalts", "tradingHalted", "interestEarned"):
+                if key not in record["summary"]:
+                    recomputed.pop(key)
     except ValidationError as error:
         first = error.errors()[0]
         raise ValueError(f"Run record is malformed at {'.'.join(str(p) for p in first['loc'])}: {first['msg']}") from None
     except (ValueError, KeyError, TypeError, ZeroDivisionError, AttributeError) as error:
         raise ValueError(f"Run record is malformed: {error}") from None
-    # Records saved before risk limits and cash yield existed have no summary fields for them. Their accounts run
-    # without either feature, so the recomputed values are then the neutral ones; anything else is a mismatch.
-    for key, neutral in LATER_SUMMARY_FIELDS.items():
-        if key not in record["summary"] and _close(recomputed.get(key), neutral):
-            recomputed.pop(key, None)
     if not _close(recomputed, record["summary"]):
         raise ValueError("Run record summary does not match its account")
     return record
