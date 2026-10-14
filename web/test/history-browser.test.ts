@@ -148,6 +148,7 @@ describe('history, snapshots and reload (real Chromium, real API, JS oracle)', (
     await openHistory(page, LIVE.id);
     await card(page, LIVE.id).locator('[data-action=use-settings]').click();
     await page.waitForFunction(() => (document.getElementById('feeBps') as HTMLInputElement).value === '1');
+    await idle(page); // the form fills inside the history transition; the start buttons re-enable once it releases the workspace
     assert.equal(await page.inputValue('#liveHours'), '2');
     assert.equal(await page.locator('#s-start-live').isEnabled(), true);
     const closed = await client.getSession(open.id);
