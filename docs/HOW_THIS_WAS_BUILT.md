@@ -27,6 +27,7 @@ Paper Trail was built by one operator directing AI coding agents (Claude Code an
 | [#6](https://github.com/QualiaRain/btc-link-paper-trader/pull/6) | Forecast report card: does the rule call direction better than chance? | Claude Code, with an independent critic agent | 61 tests, including a random-walk control; browser render at desktop and phone width; numbers cross-checked by a separate replay |
 | [#7](https://github.com/QualiaRain/btc-link-paper-trader/pull/7) | Faster forecast settling (31-day replay 100 s → 1.5 s) | Claude Code | Full accounts byte-identical before and after on three 31-day runs; two deliberately broken variants fail the new tests |
 | [#4](https://github.com/QualiaRain/btc-link-paper-trader/pull/4) | Python backend + TypeScript frontend (requested), run locally with `scripts/run-local.sh` | Claude Code builders; Codex follow-up | Python must match goldens produced by the JavaScript engine; full suite (JS, Python, TypeScript with real Chromium) rerun independently before each push; GitHub CI; fresh-clone rehearsal of the launcher (sample replay matches, saved run survives a restart, unreachable off loopback) |
+| (alignment) | Operating rules for agents (`CLAUDE.md`), their provenance (`docs/PRINCIPLES.md`), a proposed pre-registered held-out test (`docs/EVALUATION_CONTRACT.md`) with a seeded window picker, a PR receipt template, and wording fixes from a read-only audit | Claude Code, with a separate read-only audit agent and a separate reviewer agent | `npm test` including a pinned-output test for the picker; parity goldens rerun; `scripts/verify.sh` in CI; reviewer agent re-read the contract for ways to game it |
 
 ## Mistakes caught, and how
 
@@ -54,12 +55,12 @@ Paper Trail was built by one operator directing AI coding agents (Claude Code an
   - The paper account ended at $997.58 (−0.24%) after 34 fills.
   - Buying and holding half BTC and half LINK ended at $1,021.14.
   - Grade: **Measured.**
-- **Forecast skill:** direction was called right in 116 of 235 BTC forecasts (49%) and 117 of 221 LINK forecasts (53%). Neither differs from a coin flip. This much data can only detect an edge larger than about ±6–7 points. Grade: **Measured.**
-- **Costs:** a typical 7-minute BTC move in the sample is about 3 basis points, while one round trip costs about 14 at the default costs. This rule cannot clear its costs at this horizon whatever its accuracy. Grade: **Measured** (independent critic); the conclusion is **Inferred**.
+- **Forecast skill:** direction was called right in 116 of 235 BTC forecasts (49%) and 117 of 221 LINK forecasts (53%). Neither is distinguishable from a coin flip at p < 0.025 with that many forecasts, which can only detect an edge larger than about ±6–7 points. Grade: **Measured.**
+- **Costs:** in this sample, the typical 7-minute BTC move is about 3 basis points, while one round trip costs about 14 at the default costs. On moves of that size the rule cannot clear its costs at this horizon whatever its accuracy; whether other periods move more is untested. Grade: **Measured** (independent critic); the conclusion is **Inferred**.
 
 ## Not claimed
 
-- **No trading edge.** One 30-hour window proves nothing either way, and repeatedly tuning settings on the same data would overfit them. A test that would mean something has been drafted: rules and pass criteria fixed in advance, then judged on randomly chosen unseen month-long windows. It has not been frozen or run.
+- **No trading edge.** One 30-hour window proves nothing either way, and repeatedly tuning settings on the same data would overfit them. A test that would mean something is written down in [docs/EVALUATION_CONTRACT.md](EVALUATION_CONTRACT.md): rules and pass criteria fixed in advance, then judged on three 28-day windows chosen by a seeded picker from a value that does not exist yet. It is proposed, not frozen, and has not been run.
 - **Paper fills are not real fills.** Replay bid/ask is modeled from candle closes with an assumed spread. Latency, queue position, market impact, taxes and funding are not modeled.
 - **Live mode from the cloud is unexercised.** The build environment cannot reach Coinbase, so live polling was tested only with fixtures, not end to end.
 - **The Python/TypeScript version is local only.** It has no hosting, authentication or rate limits, listens on 127.0.0.1, and must not be exposed until those are added.
