@@ -20,19 +20,26 @@ Two statements, both J's, both current. Keep them separate; do not quietly colla
 
 ## Invariants (change only with J's explicit ruling, recorded in the PR)
 
+These restate boundaries J has already set in the README and docs; none is new here.
+
 - Simulated cash only. No wallets, exchange keys, order endpoints, real-money paths or paid services, anywhere.
 - Long only, no leverage, allocation at most 50% per asset; the two account limits always win over the rule.
 - The Python/TypeScript version binds to 127.0.0.1 and is not hosted or exposed until the hardening list in
-  `docs/BACKEND_MIGRATION.md` is done. The GitHub Pages app stays on the JavaScript engine until then.
-- The JavaScript modules at the root are the parity reference; Python must reproduce their goldens.
-- The forecast ledger scores direction with the exact two-sided sign test in `report-card.js`
-  (at least 30 decided forecasts, p < 0.025 per asset). A rule with no skill scores 50%.
+  `docs/BACKEND_MIGRATION.md` is done (J's recorded decision, October 2026: local only).
+
+## Current design (operational: changeable by an ordinary PR with a receipt and a reviewer)
+
+- The JavaScript modules at the root are the parity reference; Python must reproduce their goldens. The GitHub
+  Pages app runs on that JavaScript engine; switching it is listed as "not done" in `docs/BACKEND_MIGRATION.md`.
+- The report card grades direction with the exact two-sided sign test in `report-card.js` (at least 30 decided
+  forecasts, p < 0.025 per asset); a rule with no skill scores 50%. This was an agent design choice in PR 6,
+  checked by a random-walk control, not a ruling.
 
 ## Verification (the verifier owns correctness, not the builder)
 
 - Before building, name the answer sheet: the test, golden, oracle or invariant the change is checked against. If
-  none exists, build it first. Existing answer sheets: `npm test`, `node --test parity/**/*.test.mjs`, the
-  random-walk control in `report-card.test.js`, the oracle in `web/test/oracle.ts`, and `scripts/verify.sh`
+  none exists, build it first. Existing answer sheets: `npm test`, `node --test parity/*.test.mjs parity/*/*.test.mjs`,
+  the random-walk control in `report-card.test.js`, the oracle in `web/test/oracle.ts`, and `scripts/verify.sh`
   (all of it, including real-Chromium browser tests; CI runs exactly this).
 - Run the checks yourself and paste the output in the PR. "CI will tell us" is not verification.
 - **Tests are amendable but not unilaterally.** Never skip, disable, loosen or delete a test to get green. If a
@@ -53,7 +60,8 @@ Two statements, both J's, both current. Keep them separate; do not quietly colla
 - "Verified" means a disconfirming check was attempted and failed to disconfirm. Otherwise write PARTIAL or
   UNKNOWN. A retrieval that was stopped reads "not established, retrieval incomplete", never "checked and absent".
 - Honest results over flattering ones. A rule that loses or shows no skill is reported as such, in the app and in
-  the docs. Marketing-grade words (edge, alpha, HFT, guaranteed) do not appear in this repo.
+  the docs. Words like edge, alpha or guaranteed are never used as claims about this rule; they appear only in
+  negations ("no trading edge") or in stating what a test could detect.
 
 ## Workflow
 
@@ -66,7 +74,8 @@ Two statements, both J's, both current. Keep them separate; do not quietly colla
 - **Every PR is a receipt.** Fill in `.github/pull_request_template.md`: object served, what changed, verification
   run with output, coverage gaps, what is deliberately not claimed, J attention consumed, authorization level of any
   rule change, and the controller change (what will be different next time). Add a row to the change history in
-  `docs/HOW_THIS_WAS_BUILT.md`.
+  `docs/HOW_THIS_WAS_BUILT.md`. A trivial PR (typo, link, comment) needs only "Verification" and "Not claimed" and
+  no history row.
 - **No meta-work without outward yield.** A change to docs, tooling or these rules must name the cost it removes or
   the experiment it enables. If the meta-layer grows faster than measured results, stop and say so.
 - **Never silently work around a failure.** A flaky test, a blocked fetch, a tool that could not run: report it in

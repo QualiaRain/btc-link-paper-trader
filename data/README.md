@@ -2,7 +2,7 @@
 
 `sample.json` contains actual Coinbase Exchange completed one-minute candle closes for BTC-USD and LINK-USD. Each compact row is `[UTC close timestamp in milliseconds, BTC close, LINK close]`. Only exact timestamps observed for both assets are included: 1,648 shared observations across a 1,800-minute requested window. The 152 missing shared minutes are not filled.
 
-The replay constructs **assumed** quotes around each candle close using the configured half-spread, 3 basis points by default (6 from bid to ask); the file's own assumption text still describes the original 2 bps and is overridden by the app. These are not archived executable bid/ask quotes. A replay quote's receipt time is simulated historical time. The model omits market impact, queue position and liquidity constraints; application fees must be disclosed separately.
+The replay constructs **assumed** quotes around each candle close using the configured half-spread, 3 basis points by default (6 from bid to ask). The app overrides the file's numeric `halfSpreadBps` assumption with the configured value, but the file's descriptive `spread` text still reads 2 bps and is carried into run records unchanged. These are not archived executable bid/ask quotes. A replay quote's receipt time is simulated historical time. The model omits market impact, queue position and liquidity constraints; application fees must be disclosed separately.
 
 `market.js` builds histories at runtime using only observations at or before each frame. Histories retain at most 300 observations. Gaps mean seven observations need not span exactly seven minutes; strategy calculations must use actual elapsed time.
 

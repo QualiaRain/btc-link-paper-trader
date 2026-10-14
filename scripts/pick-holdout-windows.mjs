@@ -8,10 +8,11 @@
 //        [--days 28] [--count 3] [--exclude YYYY-MM-DD/YYYY-MM-DD,...]
 //
 // Windows are [start, end) at 00:00 UTC; `end` is exclusive and the last window ends at or before --to.
+// `lastMinute` (23:59 of the last day) is the inclusive end to give the app's date-range replay.
 // --days is capped at 31 because the app's date-range replay covers at most 31 days.
 import {createHash} from 'node:crypto';
 
-const DAY=86400000, MAX_DAYS=31;
+const MINUTE=60000, DAY=86400000, MAX_DAYS=31;
 
 function day(text){
   if(typeof text!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(text))throw new Error(`Expected a UTC date YYYY-MM-DD, got ${JSON.stringify(text)}`);
@@ -56,7 +57,7 @@ export function pickHoldoutWindows({seed,from,to,days=28,count=3,exclude=[]}){
   }
   chosen.sort((a,b)=>a-b);
   return {seed,from:iso(start),to:iso(end),days,count,exclude:excluded.map(([a,b])=>`${iso(a)}/${iso(b)}`),
-    windows:chosen.map(s=>({start:`${iso(s)}T00:00`,end:`${iso(s+span)}T00:00`}))};
+    windows:chosen.map(s=>({start:`${iso(s)}T00:00`,end:`${iso(s+span)}T00:00`,lastMinute:`${iso(s+span-MINUTE)}T23:59`}))};
 }
 
 function parseArgs(argv){

@@ -22,17 +22,22 @@ The null is a coin flip: a rule with no skill is right on 50% of decided forecas
 
 ## Fixed rule and settings
 
-Exactly the app's documented defaults, exported as a `paper-trail-settings-v2` object and committed at freeze:
+Exactly the app's documented defaults. The pinned object below is what gets hashed at freeze; it is the `config`
+of a `paper-trail-settings-v2` export **without** `durationMs` (the app overwrites that with the scored range
+length) plus the replay half-spread. Each window's own `start`/`end` come from the picker (next section); they are
+the only per-run fields, so a per-window settings export will differ from this object only in `durationMs`,
+`replay.start` and `replay.end`.
 
 ```json
 {"config":{"initialCash":1000,"horizonMs":420000,"model":"trend","lookbackIntervals":7,"bufferBps":10,
  "allocationFraction":0.5,"stopLossBps":0,"maxDrawdownBps":0,"dailyLossBps":0,"cashYieldBps":0,
- "feeBps":2,"slippageBps":2,"durationMs":172800000,"maxQuoteAgeMs":60000,"maxOutcomeLatenessMs":30000,"mode":"replay"},
+ "feeBps":2,"slippageBps":2,"maxQuoteAgeMs":60000,"maxOutcomeLatenessMs":30000,"mode":"replay"},
  "replay":{"source":"range","halfSpreadBps":3}}
 ```
 
 The same-price rule (`"model":"same-price"`) with otherwise identical settings is the baseline run on each window.
-No setting may change after the freeze. A different setting is a different contract.
+No setting other than the per-window boundaries may change after the freeze. A different setting is a different
+contract.
 
 ## Data and window selection
 
@@ -43,17 +48,27 @@ No setting may change after the freeze. A different setting is a different contr
   eligible range **2025-10-01 to 2026-10-01** (exclusive end), excluding the bundled sample's days
   (`2026-10-10/2026-10-12`, already outside the range) and any window listed under "Excluded as already seen" below.
 - Seed: a value that does not exist at freeze time, so no one can choose it to pick favourable windows: **the
-  BTC-USD one-minute close for the UTC minute `2026-11-01T00:00`**, as the string the app's candle fetch returns for
-  it (for example `"68123.45"`), concatenated with the freeze commit hash: `"<close>|<commit>"`. Record the fetch
-  receipt for that candle next to the seed.
-- A window whose fetch reports more than **10% missing shared minutes** for either asset is replaced by the next
-  window the picker would have produced with `--count` raised by one, and the replacement is recorded. Fetch
-  failures are reported, never retried into a different window by hand.
+  BTC-USD one-minute close for the UTC minute `2026-11-01T00:00`**, exactly the string the app's candle fetch
+  returns for it (for example `"68123.45"`), and nothing else. Record the fetch receipt for that candle next to the
+  seed. The freeze commit is deliberately **not** part of the seed: a commit hash is the freezer's to choose and
+  could be ground until the picker lands on favourable windows.
+- **Timing rule.** The freeze commit must be pushed to `main` before the seed minute passes. A freeze recorded after
+  `2026-11-01T00:00Z` is void, because by then every candidate window could have been scored offline. If this
+  contract is not frozen in time, or a run is declared INVALID, the successor contract must name a seed minute later
+  than its own freeze, and that freeze must again be pushed before the minute passes.
+- The picker's `end` is exclusive (00:00 of the day after the window). The app's date-range replay is inclusive
+  and requires the exact start and end minute candles for both assets, so each window is run as
+  `start` = the picker's `start` and `end` = the picker's `lastMinute` (23:59 of the window's last day).
+- **Replacement rule.** A window is replaced if its fetch reports more than **10% missing shared minutes** for
+  either asset, or if the fetch is refused because an exact boundary candle is missing for either asset. The
+  replacement is the window that appears in the picker's output with `--count` raised by one and is absent from the
+  original output (the output is sorted by date, so "next" means this, not the next line). Each replacement is
+  recorded with the reason. Boundaries are never adjusted by hand.
 
 Example of the invocation (the real seed is not known yet):
 
 ```sh
-node scripts/pick-holdout-windows.mjs --seed "<close>|<commit>" --from 2025-10-01 --to 2026-10-01 --days 28 --count 3
+node scripts/pick-holdout-windows.mjs --seed "<close>" --from 2025-10-01 --to 2026-10-01 --days 28 --count 3
 ```
 
 ### Excluded as already seen
@@ -69,8 +84,16 @@ For each asset, pool `directionHits` and `directionMisses` across the three wind
 forecasts are excluded, exactly as `report-card.js` does) and apply the exact two-sided sign test from
 `report-card.js` (`signTestPValue`).
 
-- **H1 is supported** only if pooled BTC `p < 0.025` **and** hits exceed misses.
+**Drift control.** The same-price baseline forecasts no change, which the engine counts as flat, so it contributes
+nothing to hits and misses. A trend follower can beat a coin flip with no skill if a window simply drifts one way.
+Therefore, from the same decided forecasts, compute the hit rate of the two constant rules "always up" and
+"always down" (the fraction of decided outcomes that moved up, and down). The rule's hit rate must exceed the
+better of the two.
+
+- **H1 is supported** only if pooled BTC `p < 0.025`, hits exceed misses, **and** the rule's pooled hit rate exceeds
+  the better constant rule's hit rate on the same forecasts.
 - **H1 is contradicted** if pooled BTC `p < 0.025` and misses exceed hits.
+- A result with `p < 0.025` and hits over misses that fails the drift control is reported as **drift, not skill**.
 - Otherwise the result is **no clear skill**, and the detectable-edge half-width (`detectableEdgePts(n)`) is
   reported so the reader knows how small an edge the test could have seen.
 - The same three outcomes are reported for LINK. Each asset is judged on its own; one asset's pass is not evidence
@@ -111,8 +134,8 @@ horizons, assets, venues or periods. A fail or "no clear skill" is reported with
 
 - Any deviation from this document after the freeze invalidates the run; the deviation and its reason are recorded
   and the run is reported as **INVALID**, not quietly repeated.
-- A change to this document after the freeze is a new contract with a new freeze block; the old one stays in the
-  file with its outcome (run, invalid, or superseded).
+- A change to this document after the freeze is a new contract with a new freeze block and a seed minute later than
+  that freeze; the old one stays in the file with its outcome (run, invalid, or superseded).
 - No settings exploration on held-out windows. If a different rule is worth testing, write a new contract first and
   draw new windows.
 
@@ -120,10 +143,10 @@ horizons, assets, venues or periods. A fail or "no clear skill" is reported with
 
 ```
 Frozen by:            J, on <date>, in <PR or message reference>
-Freeze commit:        <full hash>
-Settings export hash: <sha256 of the committed paper-trail-settings-v2 file>
+Freeze commit:        <full hash>, pushed to main at <UTC time>, before the seed minute
+Pinned settings hash: <sha256 of the pinned JSON object above, as committed>
 Seed candle minute:   2026-11-01T00:00 UTC  (fetched on <date>, receipt sha256 <...>)
-Seed string:          <close>|<commit>
-Chosen windows:       <committed JSON from the picker>
+Seed string:          <close>
+Chosen windows:       <committed JSON from the picker, including lastMinute>
 Excluded as seen:     <final list>
 ```

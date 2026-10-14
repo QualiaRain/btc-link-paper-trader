@@ -25,8 +25,10 @@ test('windows are whole UTC days of the requested length, inside the range, non-
   const out=pickHoldoutWindows({seed:'s',from:'2026-01-01',to:'2026-10-01',days:31,count:4,exclude});
   const from=Date.parse('2026-01-01T00:00Z'),to=Date.parse('2026-10-01T00:00Z');
   const spans=out.windows.map(w=>[Date.parse(w.start+':00Z'),Date.parse(w.end+':00Z')]);
-  for(const [s,e] of spans){
+  for(const [i,[s,e]] of spans.entries()){
     assert.equal(e-s,31*DAY);
+    // The inclusive end handed to the app is one minute before the exclusive end.
+    assert.equal(Date.parse(out.windows[i].lastMinute+':00Z'),e-60000);
     assert.ok(s>=from&&e<=to);
     assert.equal(s%DAY,0);
     for(const [a,b] of [[Date.parse('2026-03-01T00:00Z'),Date.parse('2026-04-15T00:00Z')],[Date.parse('2026-07-04T00:00Z'),Date.parse('2026-07-05T00:00Z')]])
