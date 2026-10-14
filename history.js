@@ -138,6 +138,23 @@ export function exportRun(record) {
   return copy({...record, market: packMarket(record.market)});
 }
 
+const COVERAGE_KEYS = ['expectedCount', 'observedCount', 'missingCount', 'warmupObservedCount'];
+
+// The per-asset counts of a dataset's coverage block (sample window or scored date range), or null without one.
+// Only the counts travel with history listings; the missing minutes themselves stay in the exported record.
+export function coverageSummary(coverage) {
+  if (!coverage || typeof coverage !== 'object') return null;
+  const out = {};
+  for (const asset of ['BTC', 'LINK']) {
+    const item = coverage[asset];
+    if (!item || typeof item !== 'object' || !COVERAGE_KEYS.every(key => Number.isFinite(item[key]))) return null;
+    out[asset] = Object.fromEntries(COVERAGE_KEYS.map(key => [key, item[key]]));
+  }
+  return out;
+}
+
+const receiptCount = dataset => (Array.isArray(dataset?.provenance) ? dataset.provenance.length : 0);
+
 export function runMetadata(record) {
   validateRecord(record);
   const market = record.market ?? {};
@@ -145,7 +162,10 @@ export function runMetadata(record) {
     status: record.status, config: record.config, summary: record.summary, hashes: record.hashes,
     manualTradeCount: record.manualTradeCount, source: market.source ?? market.dataset?.source ?? market.kind ?? 'Supplied observations',
     scoreStart: market.scoreStart ?? market.dataset?.scoreStart ?? record.account.startedAt,
-    scoreEnd: market.scoreEnd ?? market.dataset?.scoreEnd ?? record.summary.valuationAt};
+    scoreEnd: market.scoreEnd ?? market.dataset?.scoreEnd ?? record.summary.valuationAt,
+    kind: market.kind ?? null,
+    coverage: coverageSummary(market.dataset?.coverage ?? market.coverage),
+    receiptCount: receiptCount(market.dataset) || receiptCount(market)};
 }
 
 function database() {

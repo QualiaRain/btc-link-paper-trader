@@ -7,7 +7,7 @@ import type {Browser, Page} from 'playwright-core';
 import {PaperTrailClient, type RunRecord} from '../src/client.ts';
 import {createOracle, assertParity, observe, type Oracle} from './oracle.ts';
 import {repo, startApi, type RunningApi} from './server.ts';
-import {assertMatchesOracle, assertNoFutureFrames, assertRunPanels, connected, idle, launch, openPage, press, read, readPanels, startSession, type Seen} from './support.ts';
+import {assertCoverageShown, assertMatchesOracle, assertNoFutureFrames, assertRunPanels, connected, idle, launch, openPage, press, read, readPanels, startSession, SAMPLE_COVERAGE_LINE, type Seen} from './support.ts';
 
 let api: RunningApi;
 let client: PaperTrailClient;
@@ -62,6 +62,17 @@ describe('history, snapshots and reload (real Chromium, real API, JS oracle)', (
     assert.match(await page.locator('#history-count').innerText(), /^\(\d+\)$/);
     const listed = await client.listRuns();
     assert.equal(await page.locator('#history [data-run-id]').count(), listed.length);
+    // Coverage is part of the answer: each card says what its data held and how it was obtained. The sample run
+    // states data/README.md's numbers; the three legacy browser exports say what they did not record.
+    const coverageOf = (id: string) => card(page, id).locator('[data-field=coverage]').innerText();
+    assert.equal(await coverageOf(live.runId), SAMPLE_COVERAGE_LINE);
+    const mineListed = listed.find(run => run.id === live.runId)!;
+    assert.deepEqual(mineListed.coverage, {BTC: {expectedCount: 1800, observedCount: 1648, missingCount: 152, warmupObservedCount: oracle.lookback},
+      LINK: {expectedCount: 1800, observedCount: 1648, missingCount: 152, warmupObservedCount: oracle.lookback}});
+    assert.equal(mineListed.receiptCount, 0);
+    assert.equal(await coverageOf(COMPLETED.id), 'Minute coverage not recorded for this run · 0 fetch receipts (bundled data, no fetch) · gap and invalid-frame counts not recorded.');
+    assert.equal(await coverageOf(LIVE.id), 'Live quotes: no minute coverage is expected · gap and invalid-frame counts not recorded.');
+    assert.equal(LIVE.account.ledger.filter(e => e.type === 'gap').length, 1, 'the legacy live export really holds a gap, which is never shown as zero');
 
     // A snapshot of the run an active session owns still opens read-only.
     const mark = seen.order.length;
@@ -74,6 +85,8 @@ describe('history, snapshots and reload (real Chromium, real API, JS oracle)', (
       assert.equal(await page.locator(`#${id}`).isVisible() && await page.locator(`#${id}`).isEnabled(), false, `${id} is not usable on a snapshot`);
     assert.equal(await page.locator('#s-state').isHidden(), true);
     await assertRunPanels(page, truth(oracle), 'snapshot of the live session\'s run');
+    assertCoverageShown((await readPanels(page)).coverage, {coverage: mineListed.coverage, receiptCount: 0, summary: oracle.summary()}, 'snapshot coverage');
+    assert.equal((await readPanels(page)).coverage.text, SAMPLE_COVERAGE_LINE);
     const requests = seen.order.slice(mark);
     assert.ok(requests.every(line => line.startsWith('GET ')) && !requests.some(line => MUTATING.test(line)), `only reads: ${requests.join(', ')}`);
     assert.ok(requests.includes(`GET /v1/runs/${live.runId}`));
@@ -92,6 +105,8 @@ describe('history, snapshots and reload (real Chromium, real API, JS oracle)', (
     assert.equal(panels.assets['BTC']!.qty, PARTIAL.account.positions.BTC.qty);
     assert.equal(panels.chart.count, PARTIAL.account.equity.length);
     assert.match(await page.locator('#run-badge').innerText(), /read-only snapshot · partial/);
+    assertCoverageShown(panels.coverage, {coverage: null, receiptCount: 0, summary: PARTIAL.summary}, 'legacy partial snapshot');
+    assert.equal(panels.coverage.text, 'Minute coverage not recorded for this run · 0 fetch receipts (bundled data, no fetch) · gap and invalid-frame counts not recorded.');
     await openHistory(page, COMPLETED.id);
     await card(page, COMPLETED.id).locator('[data-action=open]').click();
     await page.waitForFunction(() => document.getElementById('run-name-label')!.textContent === 'browser-run-completed');

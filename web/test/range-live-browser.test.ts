@@ -9,7 +9,7 @@ import {PaperTrailClient} from '../src/client.ts';
 import {startFakeExchange, type FakeExchange} from './fake-exchange.ts';
 import {createRangeOracle, type RangeOracle} from './oracle.ts';
 import {startApi, type RunningApi} from './server.ts';
-import {assertMatchesOracle, assertNoFutureFrames, assertRunPanels, idle, launch, openPage, press, read, setVisibility, type Seen} from './support.ts';
+import {assertCoverageShown, assertMatchesOracle, assertNoFutureFrames, assertRunPanels, idle, launch, openPage, press, read, readPanels, setVisibility, type Seen} from './support.ts';
 import {verifyRecord} from './verify.ts';
 
 let api: RunningApi;
@@ -113,11 +113,25 @@ describe('date-range replay through the page (fake exchange)', () => {
     assert.equal(done.time, Date.parse(`${RANGE.end}:00Z`));
     assert.ok(oracle.snapshot().tradeCount > 0, 'the comparison is not vacuous');
     await assertRunPanels(page, truth(oracle), 'range panels');
+    // The run view keeps the retrieval's coverage and receipt count after the transient fetch summary is gone.
+    const finished = await client.getSession(view.id);
+    const panels = await readPanels(page);
+    assertCoverageShown(panels.coverage, {coverage: finished.coverage, receiptCount: finished.receiptCount, summary: finished.summary}, 'range coverage');
+    assert.equal(finished.receiptCount, 4);
+    assert.equal(panels.coverage.text, 'Scored range: BTC 421 of 421 minutes observed, 0 missing · LINK 421 of 421 minutes observed, 0 missing · 4 fetch receipts · 0 observation gaps · 0 invalid frames.');
 
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('#s-export')]);
     const record = JSON.parse(readFileSync((await download.path())!, 'utf8'));
     assert.equal(record.name, 'range browser run');
     assert.equal(record.market.dataset.provenance.length, fake.count('candles') - requestsBefore, 'exported receipts equal the exchange request count');
+    assert.equal(record.market.dataset.coverage.BTC.observedCount, 421, 'the export carries the coverage block');
+    const listed = (await client.listRuns()).find(run => run.id === record.id)!;
+    assert.deepEqual(listed.coverage, finished.coverage);
+    assert.equal(listed.receiptCount, 4);
+    assert.equal(listed.kind, 'historical');
+    await page.click('#view-history');
+    await page.locator(`#history [data-run-id="${record.id}"] [data-field=coverage]`).waitFor();
+    assert.equal(await page.locator(`#history [data-run-id="${record.id}"] [data-field=coverage]`).innerText(), panels.coverage.text);
     const checked = verifyRecord(record);
     assert.ok(checked.configHashOk && checked.marketHashOk && checked.historyRestored, JSON.stringify(checked));
     assert.equal(checked.futureFrames, 0);
@@ -144,6 +158,10 @@ describe('date-range replay through the page (fake exchange)', () => {
       oracle.apply({kind: 'finish'});
       await assertMatchesOracle(page, client, oracle, 'gapped');
       await assertRunPanels(page, truth(oracle), 'gapped panels');
+      const shown = (await readPanels(page)).coverage;
+      assertCoverageShown(shown, {coverage: {BTC: {observedCount: 59, expectedCount: 61, missingCount: 2}, LINK: {observedCount: 60, expectedCount: 61, missingCount: 1}},
+        receiptCount: 2, summary: oracle.summary()}, 'gapped coverage');
+      assert.match(shown.text, /^Scored range: BTC 59 of 61 minutes observed, 2 missing · LINK 60 of 61 minutes observed, 1 missing · 2 fetch receipts · 0 observation gaps · 0 invalid frames\.$/);
     } finally { delete fake.gaps['BTC']; delete fake.gaps['LINK']; }
   }));
 
@@ -280,6 +298,12 @@ describe('live paper sessions through the page (fake exchange)', () => {
     assert.ok(traded.qty.BTC > 0);
     const account = (await client.getSessionAccount(traded.id)).account;
     assert.equal(await page.locator('#chart-svg').getAttribute('data-points'), String(account.equity.length));
+    // A live run has no minute window to cover; its own gap and invalid-frame counts are still stated.
+    const liveState = await client.getSession(traded.id);
+    assert.equal(liveState.coverage, null);
+    assertCoverageShown((await readPanels(page)).coverage, {coverage: null, receiptCount: null, summary: liveState.summary}, 'live coverage');
+    assert.equal((await readPanels(page)).coverage.text, `Live quotes: no minute coverage is expected · ${liveState.summary.gapEvents} observation gaps · ${liveState.summary.invalidFrames} invalid frames.`);
+    assert.equal(liveState.summary.invalidFrames, 0, 'the 502 left no frame behind');
     // Save + export, verified with the original app's own record checks.
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('#s-export')]);
     const record = JSON.parse(readFileSync((await download.path())!, 'utf8'));

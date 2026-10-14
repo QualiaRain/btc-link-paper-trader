@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {createAccount, ingest} from '../../../engine.js';
 import {normalizeSettings} from '../../../configuration.js';
-import {loadSample} from '../../../market.js';
+import {loadSample, sampleCoverage} from '../../../market.js';
 import {makeRunRecord, exportRun} from '../../../history.js';
 
 globalThis.fetch = async url => ({ok: true, status: 200, json: async () => JSON.parse(readFileSync(fileURLToPath(url), 'utf8'))});
@@ -18,7 +18,8 @@ const frames = cached.frames.map(f => ({...f, quotes: Object.fromEntries(['BTC',
 }))}));
 const cursor0 = settings.config.lookbackIntervals;
 const dataset = {...cached, frames, scoreStart: frames[cursor0].time, scoreEnd: frames.at(-1).time,
-  assumptions: {...cached.assumptions, halfSpreadBps: settings.replay.halfSpreadBps}, warmupFrameCount: cursor0};
+  assumptions: {...cached.assumptions, halfSpreadBps: settings.replay.halfSpreadBps}, warmupFrameCount: cursor0,
+  coverage: sampleCoverage(cached, cursor0)}; // app.js records the sample's coverage with the run
 const account = createAccount({...settings.config, durationMs: dataset.scoreEnd - dataset.scoreStart});
 ingest(account, frames[cursor0]);
 let cursor = cursor0;

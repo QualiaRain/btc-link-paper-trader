@@ -69,7 +69,8 @@ function stateOf(s) {
     scoreStart: a.startedAt ?? frame.time, scoreEnd: a.endsAt ?? frame.time + a.config.durationMs,
     status: a.status === 'completed' ? 'completed' : 'active', currentFrame: frameView(frame),
     nextDecisionAt: a.status === 'completed' ? null : (a.lastDecisionAt ?? frame.time) + a.config.horizonMs,
-    manualTradeCount: a.ledger.filter(e => e.type === 'trade' && e.actor === 'manual').length, summary: getSummary(a)};
+    manualTradeCount: a.ledger.filter(e => e.type === 'trade' && e.actor === 'manual').length, summary: getSummary(a),
+    coverage: null, receiptCount: 0}; // live quotes have no minute window to cover and no candle receipts
 }
 
 async function freshFrame(s, world, now) {

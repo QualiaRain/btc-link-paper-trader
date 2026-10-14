@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {createAccount, ingest} from '../../engine.js';
 import {normalizeSettings, utcMinute} from '../../configuration.js';
-import {loadSample} from '../../market.js';
+import {loadSample, sampleCoverage} from '../../market.js';
 import {fetchHistoricalRange} from '../../replay.js';
 import {makeRunRecord, exportRun, packMarket, unpackMarket, canonicalJSON} from '../../history.js';
 
@@ -60,8 +60,10 @@ async function sampleDataset(spec, settings) {
     if (spec.frameLimit) frames = frames.slice(0, spec.frameLimit);
     frames = thin(frames, spec.thinEvery);
     const cursor = settings.config.lookbackIntervals;
+    // app.js records the whole sample's coverage; a scenario's frameLimit only shortens the run, not the sample.
     const dataset = {...cached, frames, scoreStart: frames[cursor].time, scoreEnd: frames.at(-1).time,
-      assumptions: {...cached.assumptions, halfSpreadBps: settings.replay.halfSpreadBps}, warmupFrameCount: cursor};
+      assumptions: {...cached.assumptions, halfSpreadBps: settings.replay.halfSpreadBps}, warmupFrameCount: cursor,
+      coverage: sampleCoverage(cached, cursor)};
     return {dataset, kind: 'sample', first: cursor};
   } finally { globalThis.fetch = original; }
 }

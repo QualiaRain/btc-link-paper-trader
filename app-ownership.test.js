@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {createAccount,ingest,manualTrade} from './engine.js';
 import {normalizeSettings} from './configuration.js';
+import {sampleCoverage} from './market.js';
 const S=Date.UTC(2024,0,1),M=60000;
 function frame(time){return {time,quotes:Object.fromEntries(['BTC','LINK'].map(asset=>[asset,{mid:100,bid:99.98,ask:100.02,observedAt:time}])),history:Object.fromEntries(['BTC','LINK'].map(asset=>[asset,[{time:time-M,price:100},{time,price:100}]]))};}
 function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};}
@@ -15,7 +16,7 @@ function harness(){
   const context=vm.createContext({account:owner,dataset:{frames:[initial]},frame:initial,cursor:0,
     busy:false,active:false,readOnly:false,generation:0,runId:'original',runName:'original',
     runSettings:null,runKind:'live',storageError:false,fetchController:null,cachedSample:null,
-    createAccount,ingest,manualTrade,normalizeSettings,fetchLiveMarket:()=>quote.promise,
+    createAccount,ingest,manualTrade,normalizeSettings,sampleCoverage,fetchLiveMarket:()=>quote.promise,
     loadSample:()=>sample.promise,getRun:async()=>record,
     trimLive:x=>x,$:()=>({value:'test',hidden:false}),crypto:{randomUUID:()=> 'new-id'},
     utc:x=>String(x),numeric:()=>0,rangeVisibility(){},notify(){},setView(){},render(){},rememberCurrent(){},

@@ -154,8 +154,33 @@ export const readPanels = (page: Page) => page.evaluate(() => {
       all: Number(ledger.dataset['all']), rows: Array.from(ledger.querySelectorAll('tr')).map(r => (r as HTMLElement).dataset['type'] ?? '')},
     metrics: {equity: Number(d('m-equity').dataset['raw']), buyHold: Number(d('m-buyhold').dataset['raw']), fees: Number(d('m-fees').dataset['raw']), trades: Number(d('m-trades').dataset['raw']),
       forecasts: d('m-forecasts').textContent!},
+    coverage: {text: d('m-coverage').textContent!, ...d('m-coverage').dataset} as unknown as CoverageShown,
   };
 });
+
+/** The Data coverage line: per-asset minute counts, receipts and the run's own gap counts, as the page states them. */
+export interface CoverageShown {
+  text: string; btcObserved: string; btcExpected: string; btcMissing: string; linkObserved: string; linkExpected: string; linkMissing: string;
+  receipts: string; gaps: string; invalid: string;
+}
+export const SAMPLE_COVERAGE = {observed: 1648, expected: 1800, missing: 152}; // data/README.md: 1,648 shared observations of 1,800 minutes
+export const SAMPLE_COVERAGE_LINE = 'Sample window (warmup included): BTC 1,648 of 1,800 minutes observed, 152 missing · LINK 1,648 of 1,800 minutes observed, 152 missing · 0 fetch receipts (bundled data, no fetch) · 0 observation gaps · 0 invalid frames.';
+
+/** The coverage line equals the API's own numbers (coverage counts, receipts) and summary (gaps, invalid frames). */
+export function assertCoverageShown(shown: CoverageShown, truth: {coverage?: Record<string, {observedCount: number; expectedCount: number; missingCount: number}> | null; receiptCount?: number | null; summary: {gapEvents?: number | null; invalidFrames?: number | null}}, label: string): void {
+  for (const asset of ['btc', 'link'] as const) {
+    const c = truth.coverage?.[asset.toUpperCase()];
+    assert.equal(shown[`${asset}Observed`], c ? String(c.observedCount) : '', `${label}: ${asset} observed`);
+    assert.equal(shown[`${asset}Expected`], c ? String(c.expectedCount) : '', `${label}: ${asset} expected`);
+    assert.equal(shown[`${asset}Missing`], c ? String(c.missingCount) : '', `${label}: ${asset} missing`);
+    if (c) assert.ok(shown.text.includes(`${asset.toUpperCase()} ${c.observedCount.toLocaleString('en-US')} of ${c.expectedCount.toLocaleString('en-US')} minutes observed, ${c.missingCount.toLocaleString('en-US')} missing`), `${label}: ${shown.text}`);
+  }
+  assert.equal(shown.receipts, truth.receiptCount == null ? '' : String(truth.receiptCount), `${label}: receipts`);
+  assert.equal(shown.gaps, truth.summary.gapEvents == null ? '' : String(truth.summary.gapEvents), `${label}: gaps`);
+  assert.equal(shown.invalid, truth.summary.invalidFrames == null ? '' : String(truth.summary.invalidFrames), `${label}: invalid frames`);
+  if (truth.summary.gapEvents == null) assert.ok(shown.text.includes('gap and invalid-frame counts not recorded'), `${label}: ${shown.text}`);
+  if (!truth.coverage) assert.ok(/not recorded for this run|no minute coverage is expected/.test(shown.text), `${label}: ${shown.text}`);
+}
 
 const near = (a: number, b: number, what: string, tol = 1e-9): void => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
 const lastPoint = (d: string): [number, number] => { const all = [...d.matchAll(/[ML]([\d.-]+),([\d.-]+)/g)]; const m = all.at(-1)!; return [Number(m[1]), Number(m[2])]; };

@@ -21,7 +21,7 @@ from test_parity import diff
 PARITY = Path(__file__).resolve().parents[2] / "parity" / "sessions"
 CASES = sorted(p.stem for p in (PARITY / "inputs").glob("*.json"))
 STATE_KEYS = ("version", "kind", "cursor", "frameCount", "warmupFrameCount", "scoreStart", "scoreEnd", "status",
-              "currentFrame", "nextDecisionAt", "manualTradeCount", "summary")
+              "currentFrame", "nextDecisionAt", "manualTradeCount", "summary", "coverage", "receiptCount")
 
 
 def events_out(events: list[dict]):

@@ -4,6 +4,8 @@
 
 The replay constructs **assumed** quotes around each candle close: a 2 basis point half-spread, or 4 basis points from bid to ask. These are not archived executable bid/ask quotes. A replay quote's receipt time is simulated historical time. The model omits market impact, queue position and liquidity constraints; application fees must be disclosed separately.
 
+These counts are not only a claim in this file: `market.js` (`sampleCoverage`) computes them from `sample.json` whenever a sample run starts, and the run's record stores them as `market.dataset.coverage` per asset (`expectedCount` 1800, `observedCount` 1648, `missingCount` 152, the 152 `missingTimes`, `warmupObservedCount` = the lookback frames used as warmup), in the same shape a date-range replay records. The Python backend computes the identical block, so the hashes of sample runs agree between the two.
+
 `market.js` builds histories at runtime using only observations at or before each frame. Histories retain at most 300 observations. Gaps mean seven observations need not span exactly seven minutes; strategy calculations must use actual elapsed time.
 
 Live mode requests real public Coinbase ticker bid/ask and completed one-minute candles. The ticker exchange timestamp describes the last trade, while `observedAt` and `receivedAt` describe local HTTP receipt time. The module rejects invalid prices, crossed quotes, stale or future exchange timestamps, stale history and connection errors. It never silently substitutes replay prices in live mode.

@@ -46,6 +46,8 @@ Run JSON includes full account/ledger/forecasts, summary, config, quote/source e
 
 The included sample contains real shared BTC/LINK completed minute observations from October 10–11, 2026. [Bundled provenance](data/README.md). Date-range replay retrieves the selected public source series and saves fetch evidence/coverage. Sparse shared minutes remain gaps.
 
+Coverage is part of the answer. Every run, sample or date range, records per asset how many minutes its data window held, how many were observed and which were missing, plus the number of fetch receipts, and the run summary counts the observations the run itself lost (`gapEvents` for live pauses, `invalidFrames` for rejected quotes). The Run view and each History card show these counts; a record saved before they existed says "not recorded" rather than showing zeros.
+
 Public endpoints:
 
 - [Coinbase Exchange ticker](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-ticker): bid/ask, last-trade price and exchange last-trade timestamp.

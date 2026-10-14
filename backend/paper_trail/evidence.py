@@ -29,6 +29,7 @@ from .engine import ASSETS
 ENCODING = "history-catalog-v1"
 SAMPLE_PATH = Path(__file__).resolve().parents[2] / "data" / "sample.json"
 SAMPLE_HISTORY = 300
+MINUTE = 60000
 _SAFE = 2 ** 53 - 1
 _UNSET: Any = object()
 
@@ -260,8 +261,41 @@ def load_browser_sample(path: Path | str | None = None) -> dict[str, Any]:
     return _load_sample(str(target), target.stat().st_mtime_ns)
 
 
+def sample_coverage(sample: dict[str, Any], warmup_frame_count: int = 0) -> dict[str, dict[str, Any]]:
+    """`sampleCoverage()` of market.js: per-asset coverage of the bundled sample's own window [periodStart, periodEnd].
+
+    Same shape as a date range's coverage. The sample keeps only minutes observed for both assets, so both blocks
+    are equal; missing minutes are listed, never filled. A run takes its first `warmup_frame_count` frames (inside
+    this window) as warmup, which `warmupObservedCount` counts.
+    """
+    frames = sample["frames"]
+    start = sample.get("periodStart")
+    end = sample.get("periodEnd")
+    if start is None:
+        start = frames[0]["time"] if frames else None
+    if end is None:
+        end = frames[-1]["time"] if frames else None
+    if _safe_int(start) is None or _safe_int(end) is None or end < start or start % MINUTE or end % MINUTE:
+        raise ValueError("Sample period must be UTC minute-close timestamps")
+    if _safe_int(warmup_frame_count) is None or warmup_frame_count < 0 or warmup_frame_count > len(frames):
+        raise ValueError("Invalid warmup frame count")
+    seen = {f["time"] for f in frames}
+    missing = [t for t in range(start, end + 1, MINUTE) if t not in seen]
+    expected = (end - start) // MINUTE + 1
+    observed = sum(1 for f in frames if start <= f["time"] <= end)
+    if observed != len(seen):
+        raise ValueError("Sample observations fall outside its period")
+    return {asset: {"expectedCount": expected, "observedCount": observed, "missingCount": len(missing),
+                    "missingTimes": list(missing), "missingFraction": len(missing) / expected,
+                    "startPresent": start in seen, "endPresent": end in seen,
+                    "warmupObservedCount": warmup_frame_count, "duplicateRows": 0} for asset in ASSETS}
+
+
 def browser_sample_dataset(half_spread_bps: float, lookback: int, path: Path | str | None = None) -> dict[str, Any]:
-    """The sample dataset `app.js start('replay')` builds; the run's cursor is `lookback` (= warmupFrameCount)."""
+    """The sample dataset `app.js start('replay')` builds; the run's cursor is `lookback` (= warmupFrameCount).
+
+    Like the browser, the dataset carries the sample's coverage block so a saved sample run states its own data
+    coverage, the way a date-range run does."""
     sample = load_browser_sample(path)
     half = half_spread_bps / 10000
     label = f"Historical Coinbase candle close with ASSUMED {js_number(half_spread_bps)} bps half-spread"
@@ -271,7 +305,8 @@ def browser_sample_dataset(half_spread_bps: float, lookback: int, path: Path | s
     if lookback >= len(frames) - 1:
         raise ValueError("The included sample is too short for this lookback.")
     return {**sample, "frames": frames, "scoreStart": frames[lookback]["time"], "scoreEnd": frames[-1]["time"],
-            "assumptions": {**sample["assumptions"], "halfSpreadBps": half_spread_bps}, "warmupFrameCount": lookback}
+            "assumptions": {**sample["assumptions"], "halfSpreadBps": half_spread_bps}, "warmupFrameCount": lookback,
+            "coverage": sample_coverage(sample, lookback)}
 
 
 def browser_market(kind: str, dataset: dict[str, Any] | None, settings: dict[str, Any] | None, cursor: int, *,
