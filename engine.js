@@ -310,5 +310,7 @@ export function getSummary(a) {
     perAsset:Object.fromEntries(ASSETS.map(s=>{const fs=done.filter(f=>f.asset===s);return [s,{count:fs.length,
       mae:avg(fs,'absoluteError'),samePriceMae:avg(fs,'baselineAbsoluteError'),...forecastCounts(fs),qty:a.positions[s].qty}];})),
     riskHalts:a.ledger.filter(e=>e.type==='risk_halt').length,tradingHalted:haltReason(a),
+    // Data coverage of the run itself: observation gaps (live mode) and frames rejected as invalid.
+    gapEvents:a.ledger.filter(e=>e.type==='gap').length,invalidFrames:a.ledger.filter(e=>e.type==='invalid_frame').length,
     valuationAt:last?.time??null,valuationIsNetLiquidation:true};
 }

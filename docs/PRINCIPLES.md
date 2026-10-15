@@ -43,7 +43,7 @@ rule is a concrete candidate, and the held-out windows are the most opinion-resi
 | Tests amendable, not unilaterally | Building with Claude | `CLAUDE.md`; PR template | Documented; depends on reviewer discipline |
 | Decide the judgement before looking | Reliability Doctrine; project checkpoint ("freeze the evaluation contract before inspecting held-out outcomes"); repo rule 5 | `docs/EVALUATION_CONTRACT.md`; `scripts/pick-holdout-windows.mjs` with a pinned test | Contract proposed, not frozen; picker enforced by test |
 | Evidence grades on every result | `docs/HOW_THIS_WAS_BUILT.md` (existing practice); Reliability Doctrine §7 | PR template "Verification" | Documented and prompted |
-| Coverage is part of the answer; no unbounded absence | Reliability Doctrine §6 and "false negatives are not symmetric"; Building with Claude ("not established, retrieval incomplete") | Date-range replay records per-asset expected/observed/missing minutes and receipts (`replay.js`, `candles.py`); summary reports expired forecasts | Partly enforced in code; known gaps listed below |
+| Coverage is part of the answer; no unbounded absence | Reliability Doctrine §6 and "false negatives are not symmetric"; Building with Claude ("not established, retrieval incomplete") | Sample and range coverage blocks (`market.js`, `replay.js`, `evidence.py`, `candles.py`); ledger-event counts in both engines; Run/snapshot/History displays in both apps | Covered by JS/Python coverage tests and real-browser tests; historical and remaining limits below |
 | "Verified" needs a disconfirming attempt | Reliability Doctrine (proportionate factual disconfirmation) | PR template; reviewer agent | Documented |
 | Honest results over flattering ones | `docs/HOW_THIS_WAS_BUILT.md` operating rules; Personal AI Philosophy (truth over agreement) | Report card wording ("No clear skill"), "Not claimed" section | Enforced by the random-walk control for the verdict; by review for prose |
 | Reconstruct, reconcile, resume | Building with Claude | `CLAUDE.md`; change history table | Documented |
@@ -76,18 +76,50 @@ validated need. These do not conflict today: freezing and running the contract a
 receipt either way. They would conflict if someone proposed new rule features "to make the demo better". Agents
 surface that, they do not decide it.
 
-## Known gaps between the doctrine and the code (found 2026-10-14, not fixed in the alignment PR)
+## Coverage improvements incorporated from PR #10
 
-Found by a read-only audit agent; each is a candidate follow-up, listed here so it is not re-derived.
+The original read-only audit on 2026-10-14 identified five findings. The first three are implemented in this
+branch after incorporating [PR #10](https://github.com/QualiaRain/btc-link-paper-trader/pull/10); they are no longer
+pending implementation. This describes the combined branch, not a claim that either draft has merged or deployed.
 
-1. **Sample runs record no coverage block.** The 1,648-of-1,800 shared minutes fact for the bundled sample lives only
-   in `data/README.md`; a sample run's record and summary carry no missing-minute count (`app.js`, sample dataset
-   construction). Range runs do record it.
-2. **The root app does not display range coverage.** Missing, observed and expected minute counts and receipt counts
-   are in the export but not on screen (`app.js` run note); the TypeScript client shows them only in the transient
-   fetch summary, not in snapshots or history.
-3. **The summary has no count of gap or invalid-frame events.** They exist as ledger events only, so a live run's
-   missed polls are never summarized (`engine.js` `getSummary`).
+1. **New sample runs record coverage.** `market.js` (`sampleCoverage`) and `evidence.py` (`sample_coverage`) compute
+   per-asset expected/observed/missing counts and missing timestamps from the bundled data. The checked sample has
+   1,648 retained shared observations in a 1,800-minute window, with 152 missing minutes. Both asset blocks describe
+   that shared subset, not independently discarded observations. The full sample window includes warmup, even in a
+   partial sample run; full range coverage describes the scored window with warmup outside it. Backend partial range
+   snapshots retain counts only through the revealed frame, without a missing-timestamp list.
+2. **Both interfaces display coverage.** Root Run/snapshot/History views and TypeScript run panels/snapshots/History
+   display expected, observed and missing minute counts, stored fetch receipts and the recorded event counts.
+   Numeric warmup counts remain in the record; the sample label states that warmup is included. Live runs have no
+   minute-coverage window. See `coverage.js`, `web/src/run-panels.ts` and their call sites.
+3. **Both engine summaries count ledger events.** `getSummary` / `get_summary` expose `gapEvents` and `invalidFrames`.
+   These count `gap` and `invalid_frame` entries, not missing minutes or individual missed polls. Replays can have
+   missing source minutes while their live-gap event count remains zero.
+
+Verification: `coverage.test.js`, `backend/tests/test_coverage.py`, parity goldens and the TypeScript browser tests
+exercise recorded coverage and event counts. `web/test/root-coverage-browser.test.ts` additionally checks the root
+app's legacy History-to-snapshot path, reload, unchanged read-only export and a new run with recorded zeros.
+Invalid sample timestamps are rejected, and incomplete imported coverage displays as unavailable.
+
+### Historical evidence and compatibility limits
+
+- Imports and read-only views do not backfill absent minute coverage or summary counts. Missing counts display
+  **not recorded**; an explicitly recorded zero remains zero. A count derivable today from a saved ledger is not a
+  count recorded in that historical summary. Read-only exports preserve omissions, timestamps and hashes.
+- Both summary counts may be omitted together for compatibility; partial omissions and incorrect stated counts
+  fail backend import verification. No version/config marker identifies their era, so the importer cannot tell a
+  genuine legacy omission from both fields removed from a newer record. This is an explicit limitation, not an
+  age guarantee or tamper-proofing claim.
+- Receipt counts measure stored evidence. Zero stored receipts does not prove every retrieval was captured or that
+  no retrieval happened outside that evidence. Existing browser metadata without a receipt-count field remains
+  unavailable until metadata is rebuilt from a record; it is not silently represented as a verified zero.
+- Coverage instrumentation and parity checks establish engineering behavior, not predictive skill. Incorporating
+  this work does not freeze or execute `docs/EVALUATION_CONTRACT.md`.
+
+## Remaining doctrine/code findings from the 2026-10-14 audit
+
+The original findings 4 and 5 remain open; documentation of them is not an implementation fix.
+
 4. **Sample provenance text is inconsistent.** The sample file's assumption text says a 2 bps half-spread while the
    app overrides the value to the configured default of 3 (`app.js`, `backend/paper_trail/evidence.py`).
 5. **UI strings hard-code defaults** ("30 seconds" lateness, "cheapest verified taker") that are actually settings or

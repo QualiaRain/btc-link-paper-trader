@@ -27,7 +27,8 @@ Paper Trail was built by one operator directing AI coding agents (Claude Code an
 | [#6](https://github.com/QualiaRain/btc-link-paper-trader/pull/6) | Forecast report card: does the rule call direction better than chance? | Claude Code, with an independent critic agent | 61 tests, including a random-walk control; browser render at desktop and phone width; numbers cross-checked by a separate replay |
 | [#7](https://github.com/QualiaRain/btc-link-paper-trader/pull/7) | Faster forecast settling (31-day replay 100 s → 1.5 s) | Claude Code | Full accounts byte-identical before and after on three 31-day runs; two deliberately broken variants fail the new tests |
 | [#4](https://github.com/QualiaRain/btc-link-paper-trader/pull/4) | Python backend + TypeScript frontend (requested), run locally with `scripts/run-local.sh` | Claude Code builders; Codex follow-up | Python must match goldens produced by the JavaScript engine; full suite (JS, Python, TypeScript with real Chromium) rerun independently before each push; GitHub CI; fresh-clone rehearsal of the launcher (sample replay matches, saved run survives a restart, unreachable off loopback) |
-| (alignment) | Operating rules for agents (`CLAUDE.md`), their provenance (`docs/PRINCIPLES.md`), a proposed pre-registered held-out test (`docs/EVALUATION_CONTRACT.md`) with a seeded window picker, a PR receipt template, and wording fixes from a read-only audit | Claude Code, with a separate read-only audit agent and a separate reviewer agent | `npm test` (with a pinned-output test for the picker) and the full `scripts/verify.sh` rerun in-session after the changes (Measured); a reviewer agent re-derived the contract and found four ways to game it, all closed before merge |
+| [#9](https://github.com/QualiaRain/btc-link-paper-trader/pull/9) | Operating rules for agents (`CLAUDE.md`), their provenance (`docs/PRINCIPLES.md`), a proposed pre-registered held-out test (`docs/EVALUATION_CONTRACT.md`) with a seeded window picker, a PR receipt template, and wording fixes from a read-only audit | Claude Code, with a separate read-only audit agent and a separate reviewer agent | `npm test` (with a pinned-output test for the picker) and the full `scripts/verify.sh` rerun in-session after the changes (Measured); the original reviewer reported four contract issues addressed in the draft; the contract remains proposed and unfrozen |
+| [#10](https://github.com/QualiaRain/btc-link-paper-trader/pull/10) | Coverage is part of the answer: sample runs record their coverage block (1,648 of 1,800 minutes, 152 missing, computed from the data, not copied from a README), summaries count observation gaps and invalid frames, and the Run view and History cards in both apps show coverage, fetch receipts and those counts | Claude Code | Goldens regenerated with the repo's own generators and the diff inspected (only coverage/count fields, resulting sample market hashes and regenerated Python fixture timestamps changed); new JS, Python and real-Chromium tests for every field, including the legacy "not recorded" path on the committed browser exports; full `scripts/verify.sh` rerun before pushing |
 
 ## Mistakes caught, and how
 
@@ -46,8 +47,20 @@ Paper Trail was built by one operator directing AI coding agents (Claude Code an
    - **The lesson:** ask who a piece of work is for before judging its value.
 4. **Legacy-import gaps, tightened by a second agent (#4).**
    - **What happened:** after the Python port, Codex independently reviewed it and narrowed when old saved runs may omit the new summary fields.
-   - **The fix:** old runs may omit them only when they truly predate those features, so an omission can never hide a changed record.
+   - **The fix:** omission of risk/interest fields is restricted by the legacy config and neutral-state checks.
+     Report-card and later coverage counts have no config-era marker; their all-or-none omission rule does not prove
+     a record's age. See [Data coverage](BACKEND_MIGRATION.md#data-coverage) for the current compatibility limit.
    - Grade: **Self-reported** by Codex; CI green on that commit (**Measured**).
+5. **Coverage reconciliation caught a root-app snapshot regression (#10).**
+   - Opening an old snapshot recalculated omitted gap/invalid-frame counts; exporting it silently added those counts.
+   - The correction preserves the saved summary for read-only coverage display and the saved record for export.
+     New real-Chromium tests exercise the three unchanged legacy fixtures, reload and export, plus a new sample run
+     whose recorded zero counts remain zero. The legacy snapshot assertions failed before the correction.
+   - Additional failing checks exposed off-minute sample observations producing impossible coverage and incomplete
+     imported coverage crashing the TypeScript formatter. Narrow guards reject invalid sample timestamps and render
+     unavailable imported counts as "not recorded". Existing assertions and goldens remain intact.
+   - Grade: **Measured** for the regression checks; the independent reviewer also compared the changed goldens and
+     existing assertions. These checks establish engineering behavior, not predictive skill.
 
 ## What the results say
 

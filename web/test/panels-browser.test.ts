@@ -6,7 +6,7 @@ import type {Browser, Page} from 'playwright-core';
 import {PaperTrailClient} from '../src/client.ts';
 import {createOracle, type Action, type Oracle} from './oracle.ts';
 import {repo, startApi, type RunningApi} from './server.ts';
-import {assertNoFutureFrames, assertMatchesOracle, assertRunPanels, idle, launch, openPage, press, read, readPanels, startSession, type Seen} from './support.ts';
+import {assertCoverageShown, assertNoFutureFrames, assertMatchesOracle, assertRunPanels, idle, launch, openPage, press, read, readPanels, startSession, SAMPLE_COVERAGE, SAMPLE_COVERAGE_LINE, type Seen} from './support.ts';
 
 let api: RunningApi;
 let client: PaperTrailClient;
@@ -69,6 +69,12 @@ describe('Run view panels (real Chromium, real API, JS oracle)', () => {
       if (filter !== 'all') assert.ok(ui.rows.every(type => type === (filter === 'trades' ? 'trade' : 'decision')));
     }
     assert.match(await page.locator('#ledger-note').textContent() ?? '', new RegExp(`^Showing 80 of ${want.decisions} events`));
+    // The run view states the sample's data coverage (data/README.md's numbers) from the API's own state.
+    const state = await client.getSession((await read(page)).id);
+    assertCoverageShown(done.coverage, {coverage: state.coverage, receiptCount: state.receiptCount, summary: state.summary}, 'finished coverage');
+    assert.deepEqual(state.coverage!.BTC, {expectedCount: SAMPLE_COVERAGE.expected, observedCount: SAMPLE_COVERAGE.observed, missingCount: SAMPLE_COVERAGE.missing, warmupObservedCount: oracle.lookback});
+    assert.deepEqual([state.summary.gapEvents, state.summary.invalidFrames], [oracle.summary().gapEvents, oracle.summary().invalidFrames], 'the root engine agrees on the counts');
+    assert.equal(done.coverage.text, SAMPLE_COVERAGE_LINE);
     await page.selectOption('#ledger-filter', 'trades');
     const firstRow = await page.locator('#ledger tr').first().locator('td').first().textContent();
     const newest = nonBenchmark.filter((e: any) => e.type === 'trade').at(-1);

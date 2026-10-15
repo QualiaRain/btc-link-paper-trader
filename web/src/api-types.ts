@@ -411,6 +411,32 @@ export interface components {
         ApiError: {
             error: components["schemas"]["ErrorBody"];
         };
+        /**
+         * AssetCoverage
+         * @description Minute coverage of one asset's source data: how many of the window's minutes were actually observed.
+         */
+        AssetCoverage: {
+            /**
+             * Expectedcount
+             * @description Minutes in the data window (the scored range for a date range; the bundled window, warmup included, for the sample).
+             */
+            expectedCount: number;
+            /**
+             * Missingcount
+             * @description Minutes without an observation; never filled or interpolated.
+             */
+            missingCount: number;
+            /**
+             * Observedcount
+             * @description Minutes with an observed close inside the window.
+             */
+            observedCount: number;
+            /**
+             * Warmupobservedcount
+             * @description Observations before the scored start that only feed warmup history.
+             */
+            warmupObservedCount: number;
+        };
         /** AssetSummary */
         AssetSummary: {
             /** Count */
@@ -654,6 +680,11 @@ export interface components {
              * @description 0 disables the stop loss.
              */
             stopLossBps?: number | null;
+        };
+        /** Coverage */
+        Coverage: {
+            BTC: components["schemas"]["AssetCoverage"];
+            LINK: components["schemas"]["AssetCoverage"];
         };
         /** Defaults */
         Defaults: {
@@ -972,15 +1003,28 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            /** @description Per-asset minute coverage of the run's source data (null for live runs and for records saved without a coverage block). */
+            coverage?: components["schemas"]["Coverage"] | null;
             /** Createdat */
             createdAt: string | null;
             hashes: components["schemas"]["Hashes"];
             /** Id */
             id: string;
+            /**
+             * Kind
+             * @description `sample`, `historical` or `live`: how the run's market data was obtained (null when the record does not say).
+             */
+            kind?: string | null;
             /** Manualtradecount */
             manualTradeCount: number;
             /** Name */
             name: string | null;
+            /**
+             * Receiptcount
+             * @description Number of retrieval receipts (one per candle request) stored with the run; 0 for the bundled sample and for caller-supplied candles.
+             * @default 0
+             */
+            receiptCount?: number;
             /** Scoreend */
             scoreEnd: number | null;
             /** Scorestart */
@@ -1062,6 +1106,8 @@ export interface components {
         /** SessionState */
         SessionState: {
             config: components["schemas"]["Config"];
+            /** @description Per-asset minute coverage of the session's source data (null for live sessions). */
+            coverage?: components["schemas"]["Coverage"] | null;
             currentFrame: components["schemas"]["FrameView"];
             /**
              * Cursor
@@ -1084,6 +1130,12 @@ export interface components {
              * @description When the next automatic decision is due (null once completed).
              */
             nextDecisionAt: number | null;
+            /**
+             * Receiptcount
+             * @description Retrieval receipts held for the session's candles (0 for the sample, caller-supplied candles and live sessions).
+             * @default 0
+             */
+            receiptCount?: number;
             /**
              * Runid
              * @description Stable id of the run this session saves to; owned by this session while it is open.
@@ -1164,11 +1216,21 @@ export interface components {
             /** Forecastcount */
             forecastCount: number;
             /**
+             * Gapevents
+             * @description Number of `gap` ledger events (live observations resumed after a pause; no intervening fills). Absent (null where listed) in summaries saved before the coverage counts existed; imports accept that only when `invalidFrames` is absent too, and a stated count must equal the ledger's.
+             */
+            gapEvents?: number | null;
+            /**
              * Interestearned
              * @description Absent in summaries saved before cash yield existed.
              * @default 0
              */
             interestEarned?: number;
+            /**
+             * Invalidframes
+             * @description Number of `invalid_frame` ledger events (frames rejected as missing, stale, future or invalid; no fill or equity mark). Absent (null where listed) in summaries saved before the coverage counts existed; imports accept that only when `gapEvents` is absent too, and a stated count must equal the ledger's.
+             */
+            invalidFrames?: number | null;
             /** Mae */
             mae: number | null;
             /** Maxdrawdownpct */

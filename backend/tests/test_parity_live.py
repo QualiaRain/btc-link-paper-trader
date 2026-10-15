@@ -29,7 +29,7 @@ PARITY = Path(__file__).resolve().parents[2] / "parity" / "live"
 CASES = sorted(p.stem for p in (PARITY / "inputs").glob("*.json"))
 BASE = "https://api.exchange.coinbase.com"
 STATE_KEYS = ("version", "kind", "cursor", "frameCount", "warmupFrameCount", "scoreStart", "scoreEnd", "status",
-              "currentFrame", "nextDecisionAt", "manualTradeCount", "summary")
+              "currentFrame", "nextDecisionAt", "manualTradeCount", "summary", "coverage", "receiptCount")
 
 
 def route(world: dict, path: str) -> dict:

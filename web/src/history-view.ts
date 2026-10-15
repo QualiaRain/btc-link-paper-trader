@@ -3,6 +3,7 @@
 // pauses the live session first, and re-checks which session it started against before applying.
 import {ApiError, PaperTrailClient, type RunMetadata, type Settings} from './client.ts';
 import {el, money, utc, utcIso} from './format.ts';
+import {coverageLine} from './run-panels.ts';
 import type {SessionView} from './session-view.ts';
 import type {SnapshotView} from './snapshot-view.ts';
 import type {Workspace} from './workspace.ts';
@@ -64,6 +65,13 @@ export class HistoryView {
     card.append(metrics);
     card.append(el('p', 'muted small', `${money(c['initialCash'], 0)} cash · ${c['model']} · ${c['horizonMs'] / 60000} min horizon · ${c['lookbackIntervals']} lookback · ${Number((c['allocationFraction'] * 100).toPrecision(12))}% per asset · buffer ${c['bufferBps']} bps · stop ${c['stopLossBps'] || 'off'}${c['stopLossBps'] ? ' bps' : ''} · drawdown limit ${c['maxDrawdownBps'] || 'off'}${c['maxDrawdownBps'] ? ' bps' : ''} · daily loss ${c['dailyLossBps'] || 'off'}${c['dailyLossBps'] ? ' bps' : ''} · cash yield ${(c['cashYieldBps'] ?? 0) / 100}%/yr · fee/slippage ${c['feeBps']}/${c['slippageBps']} bps`));
     card.append(el('p', 'muted small', `${utc(run.scoreStart ?? s.valuationAt)} → ${utc(run.scoreEnd)} · ${s.settledForecasts} scored, ${s.expiredForecasts} missed · ${run.source || 'Source in export'}`));
+    // Coverage is part of the answer: the listing says what the data held and how it was obtained.
+    const live = c['mode'] === 'live';
+    const kind = (run.kind ?? (live ? 'live' : 'sample')) as 'sample' | 'historical' | 'live';
+    const coverage$ = el('p', 'muted small coverage-line', coverageLine({kind, mode: c['mode'], coverage: run.coverage ?? null,
+      receiptCount: live ? null : run.receiptCount ?? null, summary: s}));
+    coverage$.dataset['field'] = 'coverage';
+    card.append(coverage$);
     const actions = el('div', 'actions history-actions');
     const button = (label: string, action: string, handler: () => Promise<void>): void => {
       const b = el('button', '', label);

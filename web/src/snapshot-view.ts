@@ -1,12 +1,13 @@
 // Read-only display of a saved run. This module only ever calls GET /v1/runs/{id}; it has no
 // access to the session mutators, so a snapshot can never step, order or save.
-import type {PaperTrailClient, RunRecord} from './client.ts';
+import type {Coverage, PaperTrailClient, RunRecord} from './client.ts';
 import {utc, utcIso} from './format.ts';
 import {haltNote, type RunPanels} from './run-panels.ts';
 import type {SessionView} from './session-view.ts';
 import {currentRun} from './workspace.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
+const ASSETS = ['BTC', 'LINK'] as const;
 
 export interface SnapshotDeps {
   client: Pick<PaperTrailClient, 'getRun'>;
@@ -37,14 +38,20 @@ export class SnapshotView {
     if (generation !== this.#generation) return false;
     if (!record.account?.config) throw new Error('Saved run is missing its account.');
     this.#record = record;
-    const mode = record.config['mode'] === 'live' ? 'Live paper' : (record.market?.['kind'] === 'historical' ? 'UTC replay' : 'Sample replay');
+    const live = record.config['mode'] === 'live';
+    const mode = live ? 'Live paper' : (record.market?.['kind'] === 'historical' ? 'UTC replay' : 'Sample replay');
     const quotes = (record.market?.['lastObservedFrame'] as {quotes?: any} | undefined)?.quotes ?? null;
+    // The record's own evidence: the dataset's coverage block and its retrieval receipts (none for the sample).
+    const dataset = (record.market?.['dataset'] ?? {}) as {coverage?: Coverage; provenance?: unknown[]};
+    const kind = live ? 'live' : record.market?.['kind'] === 'historical' ? 'historical' : 'sample';
+    const coverage = dataset.coverage && ASSETS.every(a => dataset.coverage?.[a]) ? dataset.coverage : null;
+    const receiptCount = live ? null : Array.isArray(dataset.provenance) ? dataset.provenance.length : 0;
     this.#deps.sessions.setSnapshotOpen(true);
     this.#deps.panels.show({
       name: record.name,
       badge: `${mode} · read-only snapshot · ${record.status === 'completed' ? 'complete' : 'partial'}`,
       detail: `${record.summary.tradeCount} fills · ${record.account.config.model} · ${record.account.config.horizonMs / 60000} min horizon · ${utc(record.account.startedAt)} → ${utc(record.account.endsAt)}${haltNote(record.summary)}`,
-      account: record.account, summary: record.summary, quotes,
+      account: record.account, summary: record.summary, quotes, kind, coverage, receiptCount,
     });
     if (!this.#deps.sessions.session) currentRun.write({runId: record.id, name: record.name, readOnly: true});
     this.#render();

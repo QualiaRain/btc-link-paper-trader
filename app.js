@@ -1,8 +1,9 @@
 import {createAccount, ingest, getSummary, manualTrade} from './engine.js';
-import {loadSample, fetchLiveMarket, fetchHistoricalRange} from './market.js';
+import {loadSample, sampleCoverage, fetchLiveMarket, fetchHistoricalRange} from './market.js';
 import {makeRunRecord, saveRun, listRuns, getRun, exportAllRuns, exportRun} from './history.js';
 import {normalizeSettings, utcMinute} from './configuration.js';
 import {reportCard, MIN_FORECASTS} from './report-card.js';
+import {coverageLine} from './coverage.js';
 
 const $ = id => document.getElementById(id);
 const money = (n,digits=2) => Number(n).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:digits,maximumFractionDigits:digits});
@@ -16,6 +17,7 @@ let account=null, dataset=null, frame=null, cursor=0, timer=null, active=false, 
 let runId=null, runName='', runSettings=null, runKind=null, storageError=false, generation=0, fetchController=null;
 let saveChain=Promise.resolve(), lastAutoSave=0, cachedSample=null, currentView='run';
 let importedTimingLimits={};
+let savedSnapshot=null;
 
 function notify(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);}
 function pauseClock(){clearInterval(timer);timer=null;active=false;generation++;}
@@ -39,7 +41,7 @@ function rangeVisibility(){$('range-settings').hidden=$('replay-source').value!=
 function download(payload,name){const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function filename(suffix='run'){return `paper-trail-${runId??'settings'}-${suffix}.json`;}
 function marketSnapshot(){return {kind:runKind,dataset,cursor,lastObservedFrame:frame,scoreStart:dataset?.scoreStart??account?.startedAt,scoreEnd:dataset?.scoreEnd??account?.endsAt,settings:runSettings};}
-async function currentRecord(){if(!account)throw new Error('No current run.');return makeRunRecord({id:runId,name:runName,account:structuredClone(account),market:marketSnapshot()});}
+async function currentRecord(){if(!account)throw new Error('No current run.');if(readOnly)return exportRun(savedSnapshot);return makeRunRecord({id:runId,name:runName,account:structuredClone(account),market:marketSnapshot()});}
 function rememberCurrent(){try{localStorage.setItem(CHECKPOINT,JSON.stringify({version:2,id:runId,readOnly}));}catch{storageError=true;notify('Run saved in History, but this browser cannot remember the current run across reloads. Export it to keep a separate copy.',true);}}
 async function updateHistoryCount(){try{$('history-count').textContent=(await listRuns()).length;}catch{$('history-count').textContent='—';}}
 async function persist(reason='snapshot'){
@@ -85,8 +87,11 @@ async function start(mode){
       const frames=cachedSample.frames.map(f=>({...f,quotes:Object.fromEntries(['BTC','LINK'].map(asset=>{const q=f.quotes[asset];return [asset,{...q,bid:q.mid*(1-half),ask:q.mid*(1+half),source:`Historical Coinbase candle close with ASSUMED ${nextSettings.replay.halfSpreadBps} bps half-spread`}];}))}));
       nextCursor=config.lookbackIntervals;
       if(nextCursor>=frames.length-1)throw new Error('The included sample is too short for this lookback.');
+      // The sample's coverage (observed, expected and missing minutes of its window) travels with the run like a
+      // date range's does, so the exported record states its own data coverage.
       nextDataset={...cachedSample,frames,scoreStart:frames[nextCursor].time,scoreEnd:frames.at(-1).time,
-        assumptions:{...cachedSample.assumptions,halfSpreadBps:nextSettings.replay.halfSpreadBps},warmupFrameCount:nextCursor};
+        assumptions:{...cachedSample.assumptions,halfSpreadBps:nextSettings.replay.halfSpreadBps},warmupFrameCount:nextCursor,
+        coverage:sampleCoverage(cachedSample,nextCursor)};
       nextFrame=frames[nextCursor];
     }
     if(mode==='replay'){
@@ -98,7 +103,7 @@ async function start(mode){
     const created=createAccount(config);ingest(created,nextFrame);
     account=created;dataset=nextDataset;frame=nextFrame;cursor=nextCursor;runSettings=nextSettings;runKind=kind;
     runId=crypto.randomUUID();runName=$('run-name').value.trim().slice(0,100)||`${kind==='live'?'Live':kind==='sample'?'Sample':'UTC replay'} · ${utc(account.startedAt)}`;
-    $('run-name').value=runName;readOnly=false;
+    $('run-name').value=runName;readOnly=false;savedSnapshot=null;
     try{await persist('new run');}catch{}
     if(account!==created||generation!==version)return;
     setView('run');render();
@@ -169,6 +174,7 @@ function reportCardPanel(summary){
     return `<div class="report-row"><div class="report-head"><strong>${asset}</strong><span class="report-verdict ${tone[g.verdict]??''}">${g.label}</span></div>${lines.map(l=>`<p class="report-line">${l}</p>`).join('')}</div>`;}).join('');
   panel.innerHTML=`<div class="panel-top"><div><h2 id="report-card-title">Forecast report card</h2><p class="muted">Did the rule call the price direction better than a coin flip?</p></div></div><div class="report-grid">${rows}</div><p class="muted small">Direction only: calling it right doesn’t mean the moves were big enough to beat costs. If you’ve tried several settings on this same date range, these odds no longer apply; confirm on a fresh range.</p>`;
 }
+function coverageText(summary){return coverageLine({kind:runKind,mode:account.config.mode,coverage:dataset?.coverage,receipts:runKind==='live'?null:(Array.isArray(dataset?.provenance)?dataset.provenance.length:0),summary});}
 function assetCards(summary){$('assets').innerHTML=['BTC','LINK'].map(asset=>{const q=frame?.quotes[asset],f=account?.forecasts.filter(f=>f.asset===asset).at(-1),decision=account?.ledger.filter(e=>(e.type==='decision'||e.type==='decision_skipped')&&e.asset===asset).at(-1),m=summary?.perAsset[asset],price=q?money(q.mid,asset==='BTC'?2:4):'—';const signal=decision?.type==='decision_skipped'?'WAIT':decision?.blockedBy?'HALTED':decision?.action==='buy'?'BUY':'KEEP CASH';const late=account?.forecasts.filter(f=>f.asset===asset&&f.latenessMs>0)??[];return `<section class="panel asset-card"><div class="asset-top"><div class="asset-title"><span class="coin ${asset==='LINK'?'link':''}">${asset==='BTC'?'₿':'⬡'}</span>${asset}<span class="muted small">/ USD</span></div><span class="status-pill">${f?signal:'Awaiting data'}</span></div><div class="asset-price">${price}</div><span class="asset-caption">${q?(q.simulatedQuote?'Recorded close · assumed spread':'Observed bid/ask midpoint'):'Market price'}</span><div class="forecast-row"><div><span>Forecast</span><strong>${f?money(f.prediction,asset==='BTC'?2:4):'—'}</strong></div><div><span>Target · UTC</span><strong class="small">${f?new Date(f.targetAt).toISOString().slice(5,16).replace('T',' '):'—'}</strong></div></div><p class="asset-metrics">Position: ${(m?.qty??0).toFixed(asset==='BTC'?6:3)} ${asset} · ${m?.count??0} scored</p><p class="asset-metrics">Mean absolute error: ${m?.mae==null?'pending':money(m.mae,4)} · Same-price: ${m?.samePriceMae==null?'pending':money(m.samePriceMae,4)}</p>${late.length?`<p class="asset-metrics">${late.length} late observation${late.length===1?'':'s'} · max ${(Math.max(...late.map(f=>f.latenessMs))/1000).toFixed(1)}s after target · over ${account.config.maxOutcomeLatenessMs/1000}s excluded</p>`:''}<div class="manual-buttons"><button data-asset="${asset}" data-side="buy" ${!account||readOnly||active||busy||account.status==='completed'?'disabled':''}>Paper buy $100</button><button data-asset="${asset}" data-side="sell" ${!account||readOnly||active||busy||!(m?.qty>0)||account.status==='completed'?'disabled':''}>Paper sell position</button></div></section>`;}).join('');}
 function ledger(){if(!account)return;const filter=$('ledger-filter').value;let rows=account.ledger.filter(e=>e.actor!=='benchmark'&&(filter==='all'||filter==='trades'&&e.type==='trade'||filter==='decisions'&&e.type==='decision'));const total=rows.length;rows=rows.slice(-80).reverse();$('ledger').innerHTML=rows.map(e=>{let title=e.type.replaceAll('_',' '),detail=e.reason??'';if(e.type==='trade'){title=`${e.actor==='manual'?'Manual ':''}${e.side}`;detail=`${e.qty.toFixed(e.asset==='BTC'?6:3)} @ ${money(e.price,e.asset==='BTC'?2:4)} · fee ${money(e.fee)}`;}else if(e.type==='decision'){title=e.action==='buy'?'Buy signal':'Keep cash';detail=`Expected net ${((e.expectedNetRatio-1)*100).toFixed(3)}% · hurdle ${((e.requiredNetRatio-1)*100).toFixed(2)}%${e.blockedBy?` · blocked by ${e.blockedBy==='max_drawdown'?'drawdown':'daily loss'} limit${e.wouldBuy?'; rule would buy':''}`:''}`;}else if(e.type==='risk_halt'){title=e.limit==='max_drawdown'?'Drawdown halt':'Daily loss halt';detail=`Net ${money(e.netLiquidation)} vs ${money(e.referenceValue)} ${e.limit==='max_drawdown'?'peak':'day open'} · limit ${e.thresholdBps} bps · ${e.resumesAt?`entries resume ${utc(e.resumesAt)}`:'no new entries this session'}`;}else if(e.type==='forecast_settled'){title='Forecast scored';detail=`${e.forecastId} · ${Math.round(e.latenessMs/1000)}s late`;}else if(e.type==='start'){detail=`Rules frozen · ${money(account.config.initialCash)} simulated cash`;}else if(e.type==='gap'){detail=`${(e.gapMs/60000).toFixed(1)} min without observations · no intervening fills`;}return `<tr><td>${shortTime(e.time)}</td><td><span class="activity-tag ${e.actor==='manual'?'manual':''}">${esc(title)}</span></td><td>${esc(e.asset??'—')}</td><td>${esc(detail)}</td><td class="numeric ${e.cashDelta>0?'positive':e.cashDelta<0?'negative':''}">${e.cashDelta==null?'—':signed(e.cashDelta)}</td></tr>`;}).join('')||'<tr><td colspan="5" class="empty-row">No matching activity.</td></tr>';$('ledger-note').textContent=`Showing ${rows.length} of ${total} events. Benchmark trades are separate. Export includes the full ledger, frozen forecasts, rules and source evidence.`;}
 function render(){
@@ -188,8 +194,8 @@ function render(){
     $('mode-badge').textContent=`${account.config.mode==='live'?'Live paper':runKind==='sample'?'Sample replay':'UTC replay'} · ${readOnly?'read-only snapshot':active?'running':account.status==='completed'?'complete':'paused / partial'}`;
     $('account-label').textContent=runName;$('clock').textContent=utc(frame?.time);
     $('run-detail').textContent=`${s.tradeCount} fills · ${account.config.model} · ${account.config.horizonMs/60000} min horizon · ${utc(account.startedAt)} → ${utc(account.endsAt)}${s.tradingHalted?` · entries halted by ${s.tradingHalted==='max_drawdown'?'drawdown':'daily loss'} limit`:''}`;
-    const coverage=dataset?.coverage;
-    $('coverage-note').textContent=account.config.mode==='replay'?`Scored range excludes warmup. ${Math.max(0,cursor-(dataset.warmupFrameCount??0))+1} shared frames processed${coverage?'; missing source minutes are reported in the export':''}.`:'Quote times are local receipt times. Closing the tab stops observations.';
+    $('coverage-note').textContent=account.config.mode==='replay'?`Scored range excludes warmup. ${Math.max(0,cursor-(dataset.warmupFrameCount??0))+1} shared frames processed.`:'Quote times are local receipt times. Closing the tab stops observations.';
+    $('coverage-detail').textContent=coverageText(readOnly?savedSnapshot.summary:s);
     $('forecast-count').textContent=`${s.settledForecasts} scored · ${s.pendingForecasts} pending · ${s.expiredForecasts??0} missed`;
     $('play').textContent=readOnly?'Read-only snapshot':active?'Pause':account.config.mode==='live'?'Resume live':'Play replay';
     $('play').disabled=readOnly||account.status==='completed'||busy&&!active;
@@ -246,7 +252,7 @@ async function archive(options){
     pauseClock();render();
     if(!readOnly){try{await persist('run before starting another');}catch{return;}}
     try{localStorage.removeItem(CHECKPOINT);}catch{}
-    account=null;dataset=null;frame=null;cursor=0;runId=null;runName='';readOnly=false;runKind=null;storageError=false;
+    account=null;dataset=null;frame=null;cursor=0;runId=null;runName='';readOnly=false;savedSnapshot=null;runKind=null;storageError=false;
     $('run-name').value='';setView('config');render();notify('Previous run is available in History. Configure a new run.');await refreshHistory();
   }finally{if(manageBusy)setBusy(false);}
 }
@@ -276,6 +282,7 @@ async function refreshHistory(){
       for(const [label,value] of [['Net value',money(s.equity)],['Return',`${s.returnPct.toFixed(2)}%`],['Buy & hold',money(s.buyHoldEquity)],['Drawdown',`${s.maxDrawdownPct.toFixed(2)}%`]]){const item=document.createElement('div');const span=document.createElement('span');span.textContent=label;const strong=document.createElement('strong');strong.textContent=value;item.append(span,strong);metrics.append(item);}card.append(metrics);
       card.append(smallText(`${money(c.initialCash,0)} cash · ${c.model} · ${c.horizonMs/60000} min horizon · ${c.lookbackIntervals} lookback · ${c.allocationFraction*100}% per asset · buffer ${c.bufferBps} bps · stop ${c.stopLossBps||'off'}${c.stopLossBps?' bps':''} · drawdown limit ${c.maxDrawdownBps||'off'}${c.maxDrawdownBps?' bps':''} · daily loss ${c.dailyLossBps||'off'}${c.dailyLossBps?' bps':''} · cash yield ${(c.cashYieldBps??0)/100}%/yr · fee/slippage ${c.feeBps}/${c.slippageBps} bps`));
       card.append(smallText(`${utc(record.scoreStart??record.summary.valuationAt)} → ${utc(record.scoreEnd)} · ${s.settledForecasts} scored, ${s.expiredForecasts??0} missed · ${record.source??'Source in export'}`));
+      card.append(smallText(coverageLine({kind:record.kind??(c.mode==='live'?'live':'sample'),mode:c.mode,coverage:record.coverage??null,receipts:c.mode==='live'?null:'receiptCount' in record?record.receiptCount:null,summary:s}),'muted small coverage-line'));
       const actions=document.createElement('div');actions.className='history-actions';
       actions.append(historyButton('Open snapshot',()=>openSaved(record.id)),historyButton('Use settings',()=>copySavedSettings(record.id)),historyButton('Export run ↓',async()=>{const full=await getRun(record.id);download(exportRun(full),`paper-trail-${record.id}.json`);}),historyButton('Export settings ↓',async()=>{const full=await getRun(record.id);download({...full.market.settings,format:'paper-trail-settings-v2',config:full.config},`paper-trail-${record.id}-settings.json`);}));
       card.append(actions);$('history-list').append(card);
@@ -289,7 +296,7 @@ function installRecord(record,isReadOnly){
   if(record.config.mode==='replay'&&(!restoredDataset?.frames?.length||!restoredDataset.frames[restoredCursor]))throw new Error('Saved replay data cannot be restored.');
   account=record.account;dataset=restoredDataset;frame=record.market.lastObservedFrame;cursor=restoredCursor;
   runId=record.id;runName=record.name;runKind=record.market.kind??(account.config.mode==='live'?'live':'sample');
-  runSettings=restoredSettings;readOnly=isReadOnly;active=false;storageError=false;
+  runSettings=restoredSettings;readOnly=isReadOnly;savedSnapshot=isReadOnly?structuredClone(record):null;active=false;storageError=false;
   applySettings(restoredSettings);$('run-name').value=runName;render();
 }
 async function openSaved(id){

@@ -25,7 +25,7 @@ from typing import Any, Callable
 from . import live
 from .engine import ASSETS, MAX_FLOAT, create_account, get_summary, ingest, manual_trade
 from .errors import ApiProblem
-from .records import RunOwned, RunStore, make_run_record, market_for, run_metadata
+from .records import RunOwned, RunStore, coverage_summary, make_run_record, market_for, receipt_count, run_metadata
 from .replay import prepare_replay, start_account
 
 MAX_SESSIONS = 64
@@ -63,6 +63,8 @@ class Session:
         self.closed_order = 0
         self._final_frame: dict | None = None
         self._horizon = account["config"]["horizonMs"]
+        fetched = dataset.get("_fetch")  # server-side retrieval receipts (records.market_for stores them)
+        self._receipt_count = len(fetched.receipts) if fetched is not None else receipt_count(dataset)
 
     # ---- views (call with the lock held) -------------------------------------------------------
     def _frame(self) -> dict:
@@ -96,6 +98,9 @@ class Session:
             "config": dict(account["config"]), "summary": get_summary(account),
             "savedVersion": self.saved_version,
             "manualTradeCount": sum(1 for e in account["ledger"] if e["type"] == "trade" and e["actor"] == "manual"),
+            # The source data's own coverage: the counts the browser app shows beside a replay (null when live).
+            "coverage": coverage_summary(self.dataset.get("coverage")),
+            "receiptCount": self._receipt_count,
         }
 
     def _check(self, expected: int | None, *, live: bool = True, kind: str | None = None) -> None:

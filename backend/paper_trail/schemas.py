@@ -230,6 +230,15 @@ class Summary(BaseModel):
     riskHalts: int = Field(0, description="Number of `risk_halt` events. Absent in summaries saved before risk limits existed.")
     tradingHalted: Literal["max_drawdown", "daily_loss"] | None = Field(
         None, description="The limit currently blocking new entries, or null. Absent in summaries saved before risk limits existed.")
+    gapEvents: int | None = Field(None, description="Number of `gap` ledger events (live observations resumed after a pause; "
+                                                   "no intervening fills). Absent (null where listed) in summaries saved before "
+                                                   "the coverage counts existed; imports accept that only when `invalidFrames` "
+                                                   "is absent too, and a stated count must equal the ledger's.")
+    invalidFrames: int | None = Field(None, description="Number of `invalid_frame` ledger events (frames rejected as missing, "
+                                                       "stale, future or invalid; no fill or equity mark). Absent (null where "
+                                                       "listed) in summaries saved before the coverage counts existed; imports "
+                                                       "accept that only when `gapEvents` is absent too, and a stated count must "
+                                                       "equal the ledger's.")
     valuationAt: float | None
     valuationIsNetLiquidation: bool
 
@@ -238,6 +247,20 @@ class Hashes(BaseModel):
     algorithm: str
     configSha256: str
     marketSha256: str
+
+
+class AssetCoverage(BaseModel):
+    """Minute coverage of one asset's source data: how many of the window's minutes were actually observed."""
+    expectedCount: int = Field(description="Minutes in the data window (the scored range for a date range; the bundled "
+                                           "window, warmup included, for the sample).")
+    observedCount: int = Field(description="Minutes with an observed close inside the window.")
+    missingCount: int = Field(description="Minutes without an observation; never filled or interpolated.")
+    warmupObservedCount: int = Field(description="Observations before the scored start that only feed warmup history.")
+
+
+class Coverage(BaseModel):
+    BTC: AssetCoverage
+    LINK: AssetCoverage
 
 
 class RunMetadata(BaseModel):
@@ -253,6 +276,11 @@ class RunMetadata(BaseModel):
     source: str
     scoreStart: float | None
     scoreEnd: float | None
+    kind: str | None = Field(None, description="`sample`, `historical` or `live`: how the run's market data was obtained (null when the record does not say).")
+    coverage: Coverage | None = Field(None, description="Per-asset minute coverage of the run's source data (null for live "
+                                                        "runs and for records saved without a coverage block).")
+    receiptCount: int = Field(0, description="Number of retrieval receipts (one per candle request) stored with the run; "
+                                             "0 for the bundled sample and for caller-supplied candles.")
 
 
 class RunRecord(BaseModel):
@@ -356,6 +384,8 @@ class SessionState(BaseModel):
     summary: Summary
     savedVersion: int | None = Field(description="Session version captured by the latest snapshot, null if never saved.")
     manualTradeCount: int
+    coverage: Coverage | None = Field(None, description="Per-asset minute coverage of the session's source data (null for live sessions).")
+    receiptCount: int = Field(0, description="Retrieval receipts held for the session's candles (0 for the sample, caller-supplied candles and live sessions).")
 
 
 class AdvanceRequest(Strict):
