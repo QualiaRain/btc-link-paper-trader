@@ -280,11 +280,11 @@ def sample_coverage(sample: dict[str, Any], warmup_frame_count: int = 0) -> dict
     if _safe_int(warmup_frame_count) is None or warmup_frame_count < 0 or warmup_frame_count > len(frames):
         raise ValueError("Invalid warmup frame count")
     seen = {f["time"] for f in frames}
+    if len(seen) != len(frames) or any(_safe_int(t) is None or t % MINUTE or t < start or t > end for t in seen):
+        raise ValueError("Sample observations must be unique UTC minute-close timestamps inside its period")
     missing = [t for t in range(start, end + 1, MINUTE) if t not in seen]
     expected = (end - start) // MINUTE + 1
-    observed = sum(1 for f in frames if start <= f["time"] <= end)
-    if observed != len(seen):
-        raise ValueError("Sample observations fall outside its period")
+    observed = len(seen)
     return {asset: {"expectedCount": expected, "observedCount": observed, "missingCount": len(missing),
                     "missingTimes": list(missing), "missingFraction": len(missing) / expected,
                     "startPresent": start in seen, "endPresent": end in seen,

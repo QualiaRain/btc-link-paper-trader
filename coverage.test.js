@@ -92,6 +92,15 @@ test('the summary counts observation gaps and invalid frames, and both are zero 
   assert.deepEqual([getSummary(createAccount()).gapEvents, getSummary(createAccount()).invalidFrames], [0, 0]);
 });
 
+test('sample coverage rejects off-minute, duplicate and outside-window observations', () => {
+  for (const times of [[0, M / 2, M], [0, 0, M], [0, M, 2 * M], [0, 0, 2 * M]]) {
+    assert.throws(() => sampleCoverage({periodStart: 0, periodEnd: M, frames: times.map(time => ({time}))}), /Sample observations/);
+  }
+  const sparse = sampleCoverage({periodStart: 0, periodEnd: 2 * M, frames: [{time: 0}, {time: 2 * M}]});
+  assert.deepEqual(sparse.BTC.missingTimes, [M]);
+  assert.equal(sparse.BTC.observedCount + sparse.BTC.missingCount, sparse.BTC.expectedCount);
+});
+
 test('the coverage line reports counts, receipts and gaps, and says when a record did not keep them', () => {
   const coverage = {BTC: {expectedCount: 1800, observedCount: 1648, missingCount: 152}, LINK: {expectedCount: 1800, observedCount: 1648, missingCount: 152}};
   assert.equal(coverageLine({kind: 'sample', mode: 'replay', coverage, receipts: 0, summary: {gapEvents: 0, invalidFrames: 0}}),

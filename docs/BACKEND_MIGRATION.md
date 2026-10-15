@@ -153,14 +153,22 @@ still equals the browser's (the evidence goldens were regenerated for this). The
 events) and `invalidFrames` (`invalid_frame` events). Run listings (`RunMetadata`) and session states carry `coverage`
 (the four counts per asset), `receiptCount` (retrieval receipts stored with the run: 0 for the sample and for
 caller-supplied candles) and `kind`; the Run view, snapshots and History cards show them with the same wording as the
-root app (`coverage.js`). A causal mid-session snapshot reports coverage only through the revealed frame, as before.
+root app (`coverage.js`). A causal mid-session **range** snapshot reports coverage only through the revealed frame.
+Sample coverage describes the full bundled window, including warmup; it does not measure how many frames a partial
+run processed. Both sample asset blocks describe retained shared observations, not independently fetched per-asset
+coverage before intersection. Live sessions have no minute-coverage window. Event counts are ledger entries, not
+counts of missing minutes or individual missed polls. Receipt counts are stored evidence counts; zero stored receipts
+does not establish that retrieval never occurred outside the recorded evidence.
 
 Imports: summaries saved before the two counts existed omit them. No config marks that era and the browser's own legacy
 live export (`parity/fixtures/browser-run-live-partial.json`) holds a real gap event, so the strict "neutral value only"
 rule used for risk limits would have refused a genuine export. The counts therefore follow the report-card rule: a
 summary may omit both together (listings then show them as null, the UI as "not recorded"), a stated count must equal
-the ledger's, and omitting one without the other fails. Nothing is hidden by the omission: both counts are a pure
-function of the ledger the record carries.
+the ledger's, and omitting one without the other fails. This rule cannot distinguish a legacy omission from both
+fields removed from a newer record: no version marker proves the record's age. The counts remain derivable from the
+stored ledger, but imports do not backfill them. Read-only snapshots in both apps use the recorded counts, and root
+snapshot exports preserve the saved record rather than silently recalculating its summary. Recorded zeros remain
+distinct from omitted counts. Existing records without minute coverage are likewise not backfilled.
 
 ## Saved runs and exports
 

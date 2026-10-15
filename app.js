@@ -17,6 +17,7 @@ let account=null, dataset=null, frame=null, cursor=0, timer=null, active=false, 
 let runId=null, runName='', runSettings=null, runKind=null, storageError=false, generation=0, fetchController=null;
 let saveChain=Promise.resolve(), lastAutoSave=0, cachedSample=null, currentView='run';
 let importedTimingLimits={};
+let savedSnapshot=null;
 
 function notify(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);}
 function pauseClock(){clearInterval(timer);timer=null;active=false;generation++;}
@@ -40,7 +41,7 @@ function rangeVisibility(){$('range-settings').hidden=$('replay-source').value!=
 function download(payload,name){const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function filename(suffix='run'){return `paper-trail-${runId??'settings'}-${suffix}.json`;}
 function marketSnapshot(){return {kind:runKind,dataset,cursor,lastObservedFrame:frame,scoreStart:dataset?.scoreStart??account?.startedAt,scoreEnd:dataset?.scoreEnd??account?.endsAt,settings:runSettings};}
-async function currentRecord(){if(!account)throw new Error('No current run.');return makeRunRecord({id:runId,name:runName,account:structuredClone(account),market:marketSnapshot()});}
+async function currentRecord(){if(!account)throw new Error('No current run.');if(readOnly)return exportRun(savedSnapshot);return makeRunRecord({id:runId,name:runName,account:structuredClone(account),market:marketSnapshot()});}
 function rememberCurrent(){try{localStorage.setItem(CHECKPOINT,JSON.stringify({version:2,id:runId,readOnly}));}catch{storageError=true;notify('Run saved in History, but this browser cannot remember the current run across reloads. Export it to keep a separate copy.',true);}}
 async function updateHistoryCount(){try{$('history-count').textContent=(await listRuns()).length;}catch{$('history-count').textContent='—';}}
 async function persist(reason='snapshot'){
@@ -102,7 +103,7 @@ async function start(mode){
     const created=createAccount(config);ingest(created,nextFrame);
     account=created;dataset=nextDataset;frame=nextFrame;cursor=nextCursor;runSettings=nextSettings;runKind=kind;
     runId=crypto.randomUUID();runName=$('run-name').value.trim().slice(0,100)||`${kind==='live'?'Live':kind==='sample'?'Sample':'UTC replay'} · ${utc(account.startedAt)}`;
-    $('run-name').value=runName;readOnly=false;
+    $('run-name').value=runName;readOnly=false;savedSnapshot=null;
     try{await persist('new run');}catch{}
     if(account!==created||generation!==version)return;
     setView('run');render();
@@ -194,7 +195,7 @@ function render(){
     $('account-label').textContent=runName;$('clock').textContent=utc(frame?.time);
     $('run-detail').textContent=`${s.tradeCount} fills · ${account.config.model} · ${account.config.horizonMs/60000} min horizon · ${utc(account.startedAt)} → ${utc(account.endsAt)}${s.tradingHalted?` · entries halted by ${s.tradingHalted==='max_drawdown'?'drawdown':'daily loss'} limit`:''}`;
     $('coverage-note').textContent=account.config.mode==='replay'?`Scored range excludes warmup. ${Math.max(0,cursor-(dataset.warmupFrameCount??0))+1} shared frames processed.`:'Quote times are local receipt times. Closing the tab stops observations.';
-    $('coverage-detail').textContent=coverageText(s);
+    $('coverage-detail').textContent=coverageText(readOnly?savedSnapshot.summary:s);
     $('forecast-count').textContent=`${s.settledForecasts} scored · ${s.pendingForecasts} pending · ${s.expiredForecasts??0} missed`;
     $('play').textContent=readOnly?'Read-only snapshot':active?'Pause':account.config.mode==='live'?'Resume live':'Play replay';
     $('play').disabled=readOnly||account.status==='completed'||busy&&!active;
@@ -251,7 +252,7 @@ async function archive(options){
     pauseClock();render();
     if(!readOnly){try{await persist('run before starting another');}catch{return;}}
     try{localStorage.removeItem(CHECKPOINT);}catch{}
-    account=null;dataset=null;frame=null;cursor=0;runId=null;runName='';readOnly=false;runKind=null;storageError=false;
+    account=null;dataset=null;frame=null;cursor=0;runId=null;runName='';readOnly=false;savedSnapshot=null;runKind=null;storageError=false;
     $('run-name').value='';setView('config');render();notify('Previous run is available in History. Configure a new run.');await refreshHistory();
   }finally{if(manageBusy)setBusy(false);}
 }
@@ -295,7 +296,7 @@ function installRecord(record,isReadOnly){
   if(record.config.mode==='replay'&&(!restoredDataset?.frames?.length||!restoredDataset.frames[restoredCursor]))throw new Error('Saved replay data cannot be restored.');
   account=record.account;dataset=restoredDataset;frame=record.market.lastObservedFrame;cursor=restoredCursor;
   runId=record.id;runName=record.name;runKind=record.market.kind??(account.config.mode==='live'?'live':'sample');
-  runSettings=restoredSettings;readOnly=isReadOnly;active=false;storageError=false;
+  runSettings=restoredSettings;readOnly=isReadOnly;savedSnapshot=isReadOnly?structuredClone(record):null;active=false;storageError=false;
   applySettings(restoredSettings);$('run-name').value=runName;render();
 }
 async function openSaved(id){

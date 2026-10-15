@@ -64,6 +64,15 @@ def test_sample_coverage_matches_the_javascript_byte_for_byte():
     assert text.startswith('{"duplicateRows":0,"endPresent":true,"expectedCount":1800,"missingCount":152,"missingFraction":0.08444444444444445,"missingTimes":[')
 
 
+def test_sample_coverage_rejects_invalid_observation_times():
+    for times in ([0, MINUTE // 2, MINUTE], [0, 0, MINUTE], [0, MINUTE, 2 * MINUTE], [0, 0, 2 * MINUTE]):
+        with pytest.raises(ValueError, match="Sample observations"):
+            evidence.sample_coverage({"periodStart": 0, "periodEnd": MINUTE, "frames": [{"time": t} for t in times]})
+    sparse = evidence.sample_coverage({"periodStart": 0, "periodEnd": 2 * MINUTE, "frames": [{"time": 0}, {"time": 2 * MINUTE}]})
+    assert sparse["BTC"]["missingTimes"] == [MINUTE]
+    assert sparse["BTC"]["observedCount"] + sparse["BTC"]["missingCount"] == sparse["BTC"]["expectedCount"]
+
+
 def test_summary_counts_gaps_and_invalid_frames():
     live = create_account({"mode": "live", "model": "same-price"})
     ingest(live, frame(T))

@@ -68,10 +68,11 @@ export function sampleCoverage(sample, warmupFrameCount = 0) {
   if (!Number.isInteger(warmupFrameCount) || warmupFrameCount < 0 || warmupFrameCount > frames.length)
     throw new Error('Invalid warmup frame count');
   const seen = new Set(frames.map(f => f.time));
+  if (seen.size !== frames.length || frames.some(f => !Number.isSafeInteger(f.time) || f.time % MINUTE || f.time < start || f.time > end))
+    throw new Error('Sample observations must be unique UTC minute-close timestamps inside its period');
   const missing = [];
   for (let t = start; t <= end; t += MINUTE) if (!seen.has(t)) missing.push(t);
-  const expectedCount = (end-start)/MINUTE+1, observedCount = frames.filter(f => f.time >= start && f.time <= end).length;
-  if (observedCount !== seen.size) throw new Error('Sample observations fall outside its period');
+  const expectedCount = (end-start)/MINUTE+1, observedCount = seen.size;
   const block = () => ({expectedCount, observedCount, missingCount: missing.length, missingTimes: missing.slice(),
     missingFraction: missing.length/expectedCount, startPresent: seen.has(start), endPresent: seen.has(end),
     warmupObservedCount: warmupFrameCount, duplicateRows: 0});

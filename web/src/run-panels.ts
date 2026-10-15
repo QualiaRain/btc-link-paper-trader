@@ -47,7 +47,8 @@ export function coverageLine({kind, mode, coverage, receiptCount, summary}: Cove
   if (mode === 'live') return `Live quotes: no minute coverage is expected · ${counts}.`;
   const per = coverage ? ASSETS.map(asset => {
     const c = coverage[asset];
-    return c ? `${asset} ${count(c.observedCount)} of ${count(c.expectedCount)} minutes observed, ${count(c.missingCount)} missing` : null;
+    return c && [c.observedCount, c.expectedCount, c.missingCount].every(Number.isFinite)
+      ? `${asset} ${count(c.observedCount)} of ${count(c.expectedCount)} minutes observed, ${count(c.missingCount)} missing` : null;
   }) : null;
   const window = kind === 'sample' ? 'Sample window (warmup included)' : 'Scored range';
   const source = receiptCount == null ? 'fetch receipts not recorded'
