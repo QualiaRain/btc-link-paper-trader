@@ -2,7 +2,7 @@
 
 A browser-local BTC/LINK paper-trading experiment with configurable rules, historical replay, live public quotes and exportable run history. The default balance is **$1,000 simulated cash**. No wallet, exchange credentials or real orders are involved.
 
-**[Open the app](https://qualiarain.github.io/btc-link-paper-trader/)** · [Source](https://github.com/QualiaRain/btc-link-paper-trader) · [How this was built](docs/HOW_THIS_WAS_BUILT.md)
+**[Open the app](https://qualiarain.github.io/btc-link-paper-trader/)** · [Source](https://github.com/QualiaRain/btc-link-paper-trader) · [How this was built](docs/HOW_THIS_WAS_BUILT.md) · [Operating rules](CLAUDE.md) · [Evaluation contract](docs/EVALUATION_CONTRACT.md)
 
 ## Configure and run
 
@@ -55,7 +55,7 @@ Public endpoints:
 - [Coinbase Exchange ticker](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-ticker): bid/ask, last-trade price and exchange last-trade timestamp.
 - [Coinbase Exchange candles](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-candles): completed one-minute candles.
 
-Local HTTP receipt time is quote availability time. The exchange ticker timestamp belongs to the last trade, not a separately timestamped bid/ask update. Forecasts score against the first qualifying later midpoint with a fixed **30-second maximum observation lateness**; missed targets expire and are excluded from accuracy. Errors are reported per asset. Longer horizons extrapolate a short recent trend and provide no new calibration evidence.
+Local HTTP receipt time is quote availability time. The exchange ticker timestamp belongs to the last trade, not a separately timestamped bid/ask update. Forecasts score against the first qualifying later midpoint within a **maximum observation lateness** of 30 seconds by default (an importable setting, frozen with the run); missed targets expire and are excluded from accuracy. Errors are reported per asset. Longer horizons extrapolate a short recent trend and provide no new calibration evidence.
 
 Public snapshots do not establish executable orders. Latency, queue position, market impact, liquidity constraints, taxes and funding are not modeled. Millisecond trading is unsupported. A good historical run or a short live pilot does not prove future profit.
 
