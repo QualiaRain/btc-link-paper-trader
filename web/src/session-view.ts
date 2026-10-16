@@ -152,6 +152,7 @@ export class SessionView {
       badge: `${live ? 'Live paper' : s.kind === 'sample' ? 'Sample replay' : 'UTC replay'} · ${mode}`,
       detail: `${s.summary.tradeCount} fills · ${s.config.model} · ${s.config.horizonMs / 60000} min horizon · ${utc(s.scoreStart)} → ${utc(s.scoreEnd)} · ${live ? 'latest quotes' : 'clock'} ${utc(s.currentFrame.time)}${haltNote(s.summary)}`,
       account, summary: s.summary, quotes: s.currentFrame.quotes,
+      kind: s.kind, coverage: s.coverage ?? null, receiptCount: live ? null : s.receiptCount ?? 0,
     });
   }
 

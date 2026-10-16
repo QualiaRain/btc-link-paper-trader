@@ -46,6 +46,10 @@ Run JSON includes full account/ledger/forecasts, summary, config, quote/source e
 
 The included sample contains real shared BTC/LINK completed minute observations from October 10–11, 2026. [Bundled provenance](data/README.md). Date-range replay retrieves the selected public source series and saves fetch evidence/coverage. Sparse shared minutes remain gaps.
 
+New sample and date-range runs record per-asset minute coverage. Complete source datasets include expected/observed/missing counts, missing timestamps and warmup counts; a backend partial range snapshot carries counts only through the revealed frame. Sample coverage describes the bundled window including warmup; range coverage describes the scored window. Both apps show expected, observed and missing minute counts in Run, snapshots and History, together with the number of stored fetch receipts. Live runs have no minute-coverage window. New summaries count `gap` and `invalid_frame` ledger events (`gapEvents` and `invalidFrames`); these are event counts, not missing-minute or missed-poll counts.
+
+Importing or viewing a historical record as a read-only snapshot does not backfill it. Missing minute coverage or summary counts display as "not recorded", while recorded zero counts display as zero. Read-only snapshot exports preserve the saved counts and omissions. Receipt counts describe evidence stored with the record, not proof that every retrieval was captured. Compatibility accepts both summary counts omitted together, but rejects a partial omission or an incorrect stated count.
+
 Public endpoints:
 
 - [Coinbase Exchange ticker](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-ticker): bid/ask, last-trade price and exchange last-trade timestamp.

@@ -479,6 +479,8 @@ def _avg(xs: list[dict], key: str) -> float | None:
 
 # Per-asset summary counts added with the forecast report card (report-card.js grades them).
 REPORT_CARD_COUNTS = ("directionHits", "directionMisses", "directionFlat", "modelCloser", "samePriceCloser", "ties")
+# Summary counts of the run's own data coverage, added later: `gap` and `invalid_frame` ledger events.
+COVERAGE_COUNTS = ("gapEvents", "invalidFrames")
 
 
 # Per settled forecast: whether the predicted direction matched the observed one
@@ -543,6 +545,9 @@ def get_summary(a: dict) -> dict[str, Any]:
         "mae": _avg(done, "absoluteError"), "samePriceMae": _avg(done, "baselineAbsoluteError"),
         "perAsset": per_asset,
         "riskHalts": sum(1 for e in a["ledger"] if e["type"] == "risk_halt"), "tradingHalted": _halt_reason(a),
+        # Data coverage of the run itself: observation gaps (live mode) and frames rejected as invalid.
+        "gapEvents": sum(1 for e in a["ledger"] if e["type"] == "gap"),
+        "invalidFrames": sum(1 for e in a["ledger"] if e["type"] == "invalid_frame"),
         "valuationAt": last["time"] if last else None,
         "valuationIsNetLiquidation": True,
     }

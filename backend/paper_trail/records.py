@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .canonical import canonical_json, js_copy, sha256_canonical
-from .engine import ASSETS, REPORT_CARD_COUNTS, create_account, get_summary, iso
+from .engine import ASSETS, COVERAGE_COUNTS, REPORT_CARD_COUNTS, create_account, get_summary, iso
 
 RUN_FORMAT = "paper-trail-run-v2"
 HASH_ALGORITHM = "SHA-256 / canonical JSON"
@@ -135,6 +135,31 @@ def _causal_evidence(dataset: dict, upto: float) -> tuple[dict, dict]:
     return evidence, coverage
 
 
+COVERAGE_KEYS = ("expectedCount", "observedCount", "missingCount", "warmupObservedCount")
+
+
+def coverage_summary(coverage: Any) -> dict[str, dict[str, int]] | None:
+    """The per-asset counts of a dataset's coverage block (history.js `coverageSummary`), or None without one.
+
+    Only the counts travel with run listings and session states; `missingTimes` stays in the exported record.
+    """
+    if not isinstance(coverage, dict) or not all(isinstance(coverage.get(a), dict) for a in ASSETS):
+        return None
+    out = {}
+    for asset in ASSETS:
+        item = coverage[asset]
+        if not all(isinstance(item.get(k), (int, float)) and not isinstance(item.get(k), bool) for k in COVERAGE_KEYS):
+            return None
+        out[asset] = {k: item[k] for k in COVERAGE_KEYS}
+    return out
+
+
+def receipt_count(dataset: Any) -> int:
+    """How many retrieval receipts (`provenance` entries) a dataset carries."""
+    provenance = dataset.get("provenance") if isinstance(dataset, dict) else None
+    return len(provenance) if isinstance(provenance, list) else 0
+
+
 def run_metadata(record: dict) -> dict[str, Any]:
     validate_record(record)
     market = record.get("market") or {}
@@ -147,6 +172,9 @@ def run_metadata(record: dict) -> dict[str, Any]:
         "source": market.get("source") or dataset.get("source") or market.get("kind") or "Supplied observations",
         "scoreStart": _first(market.get("scoreStart"), dataset.get("scoreStart"), record["account"].get("startedAt")),
         "scoreEnd": _first(market.get("scoreEnd"), dataset.get("scoreEnd"), record["summary"].get("valuationAt")),
+        "kind": market.get("kind"),
+        "coverage": coverage_summary(_first(dataset.get("coverage"), market.get("coverage"))),
+        "receiptCount": receipt_count(dataset) or receipt_count(market),
     }
 
 
@@ -211,6 +239,15 @@ def verify_imported_record(record: Any) -> dict[str, Any]:
             for asset in ASSETS:
                 for key in REPORT_CARD_COUNTS:
                     recomputed["perAsset"][asset].pop(key)
+        # Summaries saved before the coverage counts (`gapEvents`, `invalidFrames`) existed omit them. No config
+        # marks that era, and the browser app's live exports from before then do hold gap events (the repository's
+        # own fixture has one), so the counts follow the report-card rule rather than the neutral-only one: a
+        # summary may omit them only all together, and a stated count must equal the ledger's. An omission hides
+        # nothing: the counts are a pure function of the ledger the record carries, and listings show them as
+        # "not recorded" rather than as zero.
+        if not any(key in record["summary"] for key in COVERAGE_COUNTS):
+            for key in COVERAGE_COUNTS:
+                recomputed.pop(key)
     except ValidationError as error:
         first = error.errors()[0]
         raise ValueError(f"Run record is malformed at {'.'.join(str(p) for p in first['loc'])}: {first['msg']}") from None

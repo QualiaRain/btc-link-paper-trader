@@ -29,6 +29,7 @@ export type CandleJob = Schemas['CandleJob'];
 export type CandleJobCreate = Schemas['CandleJobCreate'];
 export type Receipt = Schemas['Receipt'];
 export type FrameView = Schemas['FrameView'];
+export type Coverage = Schemas['Coverage'];
 
 /** Body of an advance call; `expectedVersion` is supplied by the caller separately. */
 export type Advance = {mode: 'frames'; count?: number} | {mode: 'decision'} | {mode: 'finish'};

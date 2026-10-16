@@ -1,7 +1,7 @@
 // The Run view's read-only panels: header metrics, equity chart, forecast report card, per-asset positions and
 // forecasts, and the activity ledger with its filter. They render whatever account they are given (a live
 // session's account or a saved record's), so a snapshot is shown by exactly the same code.
-import type {Account, FrameView, LedgerEvent, Summary} from './client.ts';
+import type {Account, Coverage, FrameView, LedgerEvent, Summary} from './client.ts';
 import {renderEquityChart} from './chart.ts';
 import {digitsFor, el, money, pct, qtyDigits, shortTime, signed, utc} from './format.ts';
 import {MIN_FORECASTS, gradeAsset, type Grade} from './report-card.ts';
@@ -20,6 +20,40 @@ export interface RunData {
   summary: Summary;
   /** The latest observed quotes, when known (a live session always has them). */
   quotes: FrameView['quotes'] | null;
+  /** How the market data was obtained: decides whether coverage describes the sample window or a scored range. */
+  kind: 'sample' | 'historical' | 'live' | null;
+  /** Per-asset minute coverage of the source data; null for live runs and records saved without it. */
+  coverage: Coverage | null;
+  /** Retrieval receipts stored with the run; null when the record does not say (older records) or for live runs. */
+  receiptCount: number | null;
+}
+
+export interface CoverageFacts {
+  kind: RunData['kind'];
+  mode: string;
+  coverage: Coverage | null | undefined;
+  receiptCount: number | null | undefined;
+  summary: Pick<Summary, 'gapEvents' | 'invalidFrames'>;
+}
+
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+const count = (n: number): string => n.toLocaleString('en-US');
+
+/** app.js coverageLine(): what the data held, what was missing and how it was obtained, plus the run's own gaps. */
+export function coverageLine({kind, mode, coverage, receiptCount, summary}: CoverageFacts): string {
+  const counts = Number.isFinite(summary.gapEvents) && Number.isFinite(summary.invalidFrames)
+    ? `${plural(summary.gapEvents as number, 'observation gap')} · ${plural(summary.invalidFrames as number, 'invalid frame')}`
+    : 'gap and invalid-frame counts not recorded';
+  if (mode === 'live') return `Live quotes: no minute coverage is expected · ${counts}.`;
+  const per = coverage ? ASSETS.map(asset => {
+    const c = coverage[asset];
+    return c && [c.observedCount, c.expectedCount, c.missingCount].every(Number.isFinite)
+      ? `${asset} ${count(c.observedCount)} of ${count(c.expectedCount)} minutes observed, ${count(c.missingCount)} missing` : null;
+  }) : null;
+  const window = kind === 'sample' ? 'Sample window (warmup included)' : 'Scored range';
+  const source = receiptCount == null ? 'fetch receipts not recorded'
+    : kind === 'sample' ? `${plural(receiptCount, 'fetch receipt')} (bundled data, no fetch)` : plural(receiptCount, 'fetch receipt');
+  return `${per && per.every(Boolean) ? `${window}: ${per.join(' · ')}` : 'Minute coverage not recorded for this run'} · ${source} · ${counts}.`;
 }
 
 const ASSET_FIELDS: [string, string][] = [['qty', 'Position'], ['cost', 'Cost basis'], ['netliq', 'Net liquidation'], ['forecast', 'Latest forecast'],
@@ -66,6 +100,17 @@ export class RunPanels {
     ];
     for (const [id, text, raw] of metrics) { $(id).textContent = text; $(id).dataset['raw'] = String(raw); }
     $('m-return').className = summary.returnPct >= 0 ? 'positive' : 'negative';
+    const line = $('m-coverage');
+    line.textContent = coverageLine({kind: data.kind, mode: account.config.mode, coverage: data.coverage, receiptCount: data.receiptCount, summary});
+    for (const asset of ASSETS) {
+      const c = data.coverage?.[asset], key = asset.toLowerCase();
+      line.dataset[`${key}Observed`] = c ? String(c.observedCount) : '';
+      line.dataset[`${key}Expected`] = c ? String(c.expectedCount) : '';
+      line.dataset[`${key}Missing`] = c ? String(c.missingCount) : '';
+    }
+    line.dataset['receipts'] = data.receiptCount == null ? '' : String(data.receiptCount);
+    line.dataset['gaps'] = summary.gapEvents == null ? '' : String(summary.gapEvents);
+    line.dataset['invalid'] = summary.invalidFrames == null ? '' : String(summary.invalidFrames);
     const yieldBps = account.config.cashYieldBps ?? 0;  // absent in accounts saved before cash yield existed
     $('cash-legend').textContent = `${money(initial, 0)} cash${yieldBps ? ` at ${yieldBps / 100}%/yr` : ''}`;
     renderEquityChart($('chart'), account.equity, initial);

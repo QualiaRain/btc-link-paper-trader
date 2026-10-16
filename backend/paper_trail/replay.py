@@ -58,12 +58,15 @@ def sample_dataset(half_spread_bps: float, lookback: int, path: Path | str | Non
     cursor = lookback
     if cursor >= len(frames) - 1:
         raise ValueError("The included sample is too short for this lookback.")
+    from .evidence import sample_coverage  # local: evidence imports engine, and replay is imported by evidence users
     return {"kind": "sample", "source": data["source"], "capturedAt": data.get("capturedAt"),
             "periodStart": data.get("periodStart"), "periodEnd": data.get("periodEnd"),
             "assumptions": {**data.get("assumptions", {}), "halfSpreadBps": half_spread_bps},
             "documentation": data.get("documentation"), "frames": frames,
             "scoreStart": frames[cursor]["time"], "scoreEnd": frames[-1]["time"],
-            "warmupFrameCount": cursor, "cursor": cursor}
+            "warmupFrameCount": cursor, "cursor": cursor,
+            "coverage": sample_coverage({"frames": frames, "periodStart": data.get("periodStart"),
+                                         "periodEnd": data.get("periodEnd")}, cursor)}
 
 
 def _clean_series(asset: str, rows: Any) -> dict[int, float]:

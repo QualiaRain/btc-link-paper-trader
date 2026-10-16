@@ -9,7 +9,8 @@ import {fileURLToPath} from 'node:url';
 import {createAccount, ingest, manualTrade, getSummary} from '../../engine.js';
 import {normalizeSettings, utcMinute} from '../../configuration.js';
 import {fetchHistoricalRange} from '../../replay.js';
-import {loadSample} from '../../market.js';
+import {loadSample, sampleCoverage} from '../../market.js';
+import {coverageSummary} from '../../history.js';
 import {digest} from '../harness.mjs';
 
 const M = 60000;
@@ -58,7 +59,8 @@ async function buildDataset(settings, candles) {
     }))}));
     const cursor = config.lookbackIntervals;
     if (cursor >= frames.length - 1) throw new Error('The included sample is too short for this lookback.');
-    return {dataset: {...sample, frames, scoreStart: frames[cursor].time, scoreEnd: frames.at(-1).time, warmupFrameCount: cursor}, cursor, kind: 'sample'};
+    return {dataset: {...sample, frames, scoreStart: frames[cursor].time, scoreEnd: frames.at(-1).time, warmupFrameCount: cursor,
+      coverage: sampleCoverage(sample, cursor)}, cursor, kind: 'sample'};
   } finally { globalThis.fetch = original; }
 }
 
@@ -74,7 +76,10 @@ function stateOf(s) {
     status: completed(s) ? 'completed' : 'active', currentFrame: frameView(frame),
     nextDecisionAt: s.account.status === 'completed' ? null : (s.account.lastDecisionAt ?? frame.time) + s.account.config.horizonMs,
     manualTradeCount: s.account.ledger.filter(e => e.type === 'trade' && e.actor === 'manual').length,
-    summary: getSummary(s.account)};
+    summary: getSummary(s.account),
+    // The source data's coverage counts and how many fetch receipts back them (none: the sample is bundled and
+    // scenario candles are supplied, so the stubbed fetch's receipts are not retrieval evidence).
+    coverage: coverageSummary(s.dataset.coverage), receiptCount: 0};
 }
 
 function advance(s, action) {

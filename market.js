@@ -57,6 +57,28 @@ export async function loadSample() {
     periodEnd: data.periodEnd, assumptions: data.assumptions, documentation: data.documentation, frames};
 }
 
+// Per-asset coverage of the bundled sample, in the shape fetchHistoricalRange records for a date range:
+// which minutes of the sample's own window [periodStart, periodEnd] carry an observation. The sample keeps only
+// minutes observed for BOTH assets, so both blocks are equal; missing minutes are listed, never filled. A run
+// takes its first `warmupFrameCount` frames (inside this window) as warmup, so `warmupObservedCount` counts them.
+export function sampleCoverage(sample, warmupFrameCount = 0) {
+  const frames = sample.frames, start = sample.periodStart ?? frames[0]?.time, end = sample.periodEnd ?? frames.at(-1)?.time;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start || start % MINUTE || end % MINUTE)
+    throw new Error('Sample period must be UTC minute-close timestamps');
+  if (!Number.isInteger(warmupFrameCount) || warmupFrameCount < 0 || warmupFrameCount > frames.length)
+    throw new Error('Invalid warmup frame count');
+  const seen = new Set(frames.map(f => f.time));
+  if (seen.size !== frames.length || frames.some(f => !Number.isSafeInteger(f.time) || f.time % MINUTE || f.time < start || f.time > end))
+    throw new Error('Sample observations must be unique UTC minute-close timestamps inside its period');
+  const missing = [];
+  for (let t = start; t <= end; t += MINUTE) if (!seen.has(t)) missing.push(t);
+  const expectedCount = (end-start)/MINUTE+1, observedCount = seen.size;
+  const block = () => ({expectedCount, observedCount, missingCount: missing.length, missingTimes: missing.slice(),
+    missingFraction: missing.length/expectedCount, startPresent: seen.has(start), endPresent: seen.has(end),
+    warmupObservedCount: warmupFrameCount, duplicateRows: 0});
+  return Object.fromEntries(ASSETS.map(asset => [asset, block()]));
+}
+
 function completedHistory(rows, receivedAt) {
   if (!Array.isArray(rows)) throw new Error('Invalid Coinbase candle response');
   const cutoff = Math.floor(receivedAt / MINUTE) * MINUTE;
