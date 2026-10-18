@@ -127,7 +127,13 @@ The original findings 4 and 5 remain open; documentation of them is not an imple
 
 ## Open questions for J
 
-- Freeze `docs/EVALUATION_CONTRACT.md` as written, amend it, or leave it proposed?
-- Were the three 31-day performance runs in PR 7 on windows you can name? They would be excluded from the held-out
-  draw.
+- Approve the exact specification in `docs/EVALUATION_CONTRACT.md` (including the clarified seed bucket/string,
+  fixed settings, criteria, final exclusions and accepted prior-exposure uncertainty), amend it, or leave it proposed?
+  First resolve whether the >10% replacement threshold measures missing shared minutes or per-asset missing minutes;
+  the current wording conflates them, and the corrected draft explicitly blocks freezing until J approves one.
+  Publishing the Stage A freeze to `main` before 2026-11-01T00:00:00Z and executing Stage B need explicit authority;
+  approval to correct this draft does not grant either. Stage B observations are not required to freeze Stage A.
+- PR 7 describes its three 31-day performance runs as synthetic (author-reported). If any previously inspected
+  historical windows can be identified, exclude their enclosing UTC days before the freeze; otherwise explicitly
+  accept the remaining provenance uncertainty without inventing dates or claiming all prior access is known.
 - Is the PR template the right weight of receipt for this repo, or too much ceremony for a small project?
