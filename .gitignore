@@ -9,3 +9,4 @@ web/.build/
 web/public/assets/
 .paper-trail-data/
 *.egg-info/
+.research-data/
