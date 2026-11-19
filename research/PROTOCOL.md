@@ -1,10 +1,13 @@
 # Exploration protocol: can any setting of this rule make money after costs?
 
-> **Status: FIXED at the commit that adds this file, before any exploration data was retrieved.** The only market
-> data in the working tree at that commit is the bundled 30-hour sample. Authorization level: agent proposal
-> (Claude Code, 2026-11-18), written in answer to J's request "make me money". This is **exploration, not
-> evidence**. It can nominate a candidate for a pre-registered held-out test; it cannot establish that any rule
-> makes money, and nothing here is frozen as an evaluation contract.
+> **Status: FIXED before any exploration data was retrieved; amended once, also before any data.** The first
+> version is commit `5a82208` (2026-11-18). Amendment 1 (2026-11-19) corrects defects that independent verifiers
+> found in that version; every change is listed with its reason under "Amendments" at the end. At both commits the
+> only market data in the working tree is the bundled 30-hour sample: no exploration candle has been fetched, so
+> no rule in this file was written or changed with knowledge of the data it will be applied to.
+> Authorization level: agent proposal (Claude Code), written in answer to J's request "make me money". This is
+> **exploration, not evidence**. It can nominate a candidate for a pre-registered held-out test; it cannot
+> establish that any rule makes money, and nothing here is frozen as an evaluation contract.
 
 ## Why this exists
 
@@ -27,12 +30,16 @@ exists in this environment, so the result cannot be shaped by having seen it.
   later, with no override flag.
 - The draft contract's eligible range is `2025-10-01` to `2026-10-01`. Nothing in that range, and nothing after it,
   is fetched, read or simulated by this exploration. The one-day gap before it is deliberate.
-- **Consequence for any future contract:** every UTC day from `2020-01-01` to `2025-09-29` has now been used to
-  choose settings and must be listed under "Excluded as already seen" if a contract's eligible range ever reaches
-  back that far.
+- **Consequence for any future contract:** once this study is run, every UTC day from `2020-01-01` to `2025-09-29`
+  has been used to choose settings and must be listed under "Excluded as already seen" if a contract's eligible
+  range ever reaches back that far.
 - Each response keeps a receipt (URL, receive time, HTTP date, SHA-256 of the raw body, row count). Missing minutes
   are never filled. Raw data stays out of the repository (`.research-data/`, ignored); `research/results/` records
-  per-month row counts, coverage and a SHA-256 of each month's normalized series so a re-fetch can be compared.
+  per-month row counts, coverage, receipt counts and a SHA-256 of each month's stored series and receipts so a
+  re-fetch can be compared.
+- **The study runs only on a complete store:** every month from 2020-01 to 2025-09 present and complete for both
+  assets, fetched from the exchange. Anything else is refused unless an explicit option is given, and that option
+  is recorded as a deviation at the top of the results.
 
 ## Windows
 
@@ -47,6 +54,9 @@ exists in this environment, so the result cannot be shaped by having seen it.
 - A window is **invalid for every setting** if fewer than 90% of its minutes are observed for both assets, and
   **invalid for one setting** if the app would have refused the run for lack of causal warmup. Invalid windows are
   dropped from that setting's statistics and listed in the results.
+- Window 0 has no earlier data inside the exploration range, so the app's warmup rule refuses it for every setting
+  of families P, H, R and X: those families have at most 49 design windows, and "all 74 windows" below means at
+  most 73 for them.
 
 ## Simulation
 
@@ -58,8 +68,11 @@ assumed half-spread 3 bps** (the README's cheapest-venue assumption, about 14 bp
 The search runs on `research/fastsim.mjs`, a purpose-built simulator. Its answer sheet is the engine itself:
 `research/fastsim.test.mjs` runs random settings through both on the bundled sample and on synthetic series with
 gaps, and requires final value, comparison value, fills, fees and forecast counts to agree (1e-9 relative for
-floats, exact for counts). Every nominee from family P is additionally rerun window by window through the real
-engine before it is reported.
+floats, exact for counts). Every nominee is additionally rerun window by window through an engine before it is
+reported: families P, R, X and L through the unmodified engine (R, X and L by feeding it the history their rule
+reads), hold-through nominees through `research/holdthrough-oracle.mjs`, which is the same engine with only its
+scheduled-decision branch replaced. The record states which reference each nominee was checked against, and the
+SHA-256 of every module that ran, including whether `engine.js` still equals the one at `6f6b693`.
 
 ## Settings searched
 
@@ -68,10 +81,10 @@ engine before it is reported.
 | **P** | The app's rule. `horizonMs` in {1, 5, 7, 15, 60, 420, 1440} minutes (every horizon the app accepts) × `lookbackIntervals` in {1, 2, 3, 5, 7, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240} × `bufferBps` in {0, 5, 10, 20, 40, 80, 160, 320} × `stopLossBps` in {0, 100, 300, 1000}, `model` trend | Yes, typed into Config | 3,360 |
 | **H** | P with *hold-through*: at a scheduled decision a held asset whose test again says buy is kept instead of sold and rebought | No (engine change) | 3,360 |
 | **R** | P with the forecast reversed: the predicted drift is negated, so the rule buys after a fall | No (engine change) | 3,360 |
-| **X** | P for horizons up to 60 minutes, with LINK's forecast taken from BTC's drift (BTC unchanged) | No (engine change) | 1,920 |
+| **X** | P for the five horizons up to 60 minutes {1, 5, 7, 15, 60}, with LINK's forecast taken from BTC's drift (BTC unchanged) | No (engine change) | 2,400 |
 | **L** | Long lookback: the drift is measured over a time span in {4h, 8h, 12h, 1d, 2d, 3d, 5d, 7d, 14d, 28d} instead of at most 240 observations × horizon in {60, 420, 1440} minutes × buffer in {0, 20, 80, 320} × stop in {0, 300, 1000} × hold-through {off, on} | No (engine change) | 720 |
 
-12,720 settings in all. The same-price model is not searched: it never buys, so it is the cash line (0%).
+13,200 settings in all. The same-price model is not searched: it never buys, so it is the cash line (0%).
 
 Exact definitions of the four hypothetical changes, so they cannot drift after the data is seen:
 
@@ -94,49 +107,108 @@ Exact definitions of the four hypothetical changes, so they cannot drift after t
 Families H, R, X and L are evaluated to inform a decision J has not made (whether any rule change is worth
 building). Their results are reported; nothing from them is added to the app by this work without J's call.
 
+### Readings (how each sentence above is applied where it could be read two ways)
+
+1. *Warmup.* A window is run as if the app replayed `[first shared minute, last shared minute]`: each asset keeps
+   rows from `max(60, 2 × lookback + 10)` minutes before the first shared minute, and the run is refused unless
+   each asset has `lookback + 1` rows at or before it. Family L has no such refusal; a decision without a usable
+   `past` is skipped.
+2. *Session end.* The session ends at the window's last shared minute. When the window's nominal last minute is
+   missing for an asset, that end is earlier, and decisions whose horizon would pass it are skipped as the engine
+   skips them. No price is involved; only decisions within one horizon of the end are affected.
+3. *Hold-through.* `E` is read after that frame's stop-loss sales and before the decision's own sells. "Held" means
+   quantity above zero at that point. A kept position is never resized and keeps its original fee-inclusive cost
+   basis for the stop loss. A same-frame stop-out is a skipped decision, as in the engine. "Available cash" is the
+   cash on hand at that asset's buy.
+4. *BTC-led.* "BTC's forecast is unavailable" means BTC's drift cannot be computed from BTC's history. A BTC
+   stop-out on that frame does not skip LINK. The app's warmup refusal still applies to each asset's own series.
+5. *Long lookback.* "At most 60 minutes older" includes exactly 60 minutes.
+6. *Neighbours* (used in Nomination) are the up to four settings one grid step away on exactly one of the two axes
+   (lookback or span, and buffer), same horizon, stop and switches. They count whether or not they are eligible.
+7. *Low-coverage windows* are dropped for every setting before any statistic is computed.
+
 ## Measures
 
 For setting `c` and window `w`: `r(c,w)` = net return of the paper account in percent (final net liquidation value
 over $1,000, after every modeled cost), `b(w)` = the comparison account's return (half BTC, half LINK, bought once
 and held, same costs). Cash returns 0.
 
-- **Eligible:** the setting places at least one fill in at least half of its valid design windows. A setting that
-  never trades cannot be selected for returning exactly zero.
-- **Score:** `T(c) = mean(r) / (sd(r) / sqrt(n))` over its valid design windows (`T` is 0 when `sd` is 0).
-- **Search-adjusted p-value (reality check):** resample the design windows with replacement 10,000 times (seed
-  fixed in code, the same resampled windows for every setting). For each resample take the maximum over eligible
-  settings of `(mean*(c) − mean(c)) / (sd(c) / sqrt(n))`. The p-value is the share of resamples whose maximum is at
-  least the observed maximum `T`. Reported per family and for all families pooled. It answers: how often would the
-  best of this many settings look this good if none had a positive mean?
+- **Eligible:** the setting has at least 40 valid design windows and places at least one fill in at least half of
+  them. A setting that never trades cannot be selected for returning exactly zero.
+- **Score:** `T(c) = mean(r) / (sd(r) / sqrt(n)) × sqrt((1 − a) / (1 + a))` over its valid design windows, where
+  `a` is the lag-1 autocorrelation of `r` in window order (sum of products of deviations over adjacent valid
+  windows, divided by the sum of squared deviations), floored at 0. The second factor shrinks the score of a
+  setting whose good and bad windows come in runs, because such windows are not independent observations.
+  `T` is 0 when `sd` is 0.
+- **Search-adjusted p-value:** resample the design windows with replacement 10,000 times (seed fixed in code, the
+  same resampled windows for every setting). In each resample compute, for every eligible setting,
+  `(mean*(c) − mean(c)) / (sd*(c) / sqrt(m*(c)))`, where `mean*`, `sd*` and `m*` are taken over the resampled
+  windows valid for that setting (settings with fewer than two such windows or `sd*` of 0 are skipped in that
+  resample), and take the maximum. The p-value is the share of resamples whose maximum is at least the observed
+  maximum `T`. Reported per family and for all families pooled. It answers: how often would the best of this many
+  settings look this good if none had a positive mean?
 
 ## Nomination (design set only)
 
-Per family, take eligible settings in descending `T`. The first one with `mean(r) > 0` whose **neighbours** (one
-grid step either way in lookback and in buffer; same horizon, stop and switches) have a median `T` above 0 is that
-family's nominee. If none of the family's ten highest-scoring eligible settings qualifies, the family nominates
-nothing. At most five nominees. The reality-check p-values are reported with them, not used as a gate.
+Per family, take eligible settings in descending `T`, ties in the order the family's grid is enumerated. Settings
+whose design returns are identical window for window count once, represented by the first of them. The first of
+the ten highest-scoring distinct settings that has `mean(r) > 0` and whose neighbours have a median `T` above 0 is
+that family's nominee. If none of the ten qualifies, the family nominates nothing. At most five nominees. The
+search-adjusted p-values are reported with them, not used as a gate.
 
 ## Confirmation (one look at windows 50 to 73)
 
-Each nominee is run once on the confirmation windows. With `k` nominees:
+Each nominee is run once on the confirmation windows, at each cost level. With `k` nominees, compute on its valid
+confirmation windows the score `T` exactly as defined above, and two one-sided p-values for it: Student's t with
+`n − 1` degrees of freedom, and the share of 10,000 resamples of those windows (seed fixed in code) whose
+studentized statistic `(mean* − mean) / (sd* / sqrt(n))` is at least `T`. The confirmation p-value is the larger
+of the two.
 
-- **Confirmed at default costs:** `mean(r) > 0` with one-sided t-test `p < 0.05 / k`.
+- **Confirmed at default costs:** at least 20 valid confirmation windows, `mean(r) > 0`, and confirmation
+  p-value `< 0.05 / k`.
 - **Confirmed and cost-robust:** additionally `mean(r) > 0` when rerun with `feeBps` 10 (about 30 bps per round
   trip), following the README's warning that a result surviving only at the cheapest venue's costs is fragile.
 - Otherwise **not confirmed**.
 
 Reported alongside, not pass/fail: the intercept and slope of `r` regressed on `b` across windows (is the return
-more than a diluted share of buy-and-hold?), the share of windows with `r > 0`, worst window, average fills and fees
-per window, the direction sign test on the nominee's forecasts, and the rerun at `feeBps` 40.
+more than a diluted share of buy-and-hold?), the share of windows with `r > 0`, worst window, skewness and lag-1
+autocorrelation of `r`, average fills and fees per window, the app's two-sided direction sign test on the
+nominee's forecasts pooled over its confirmation windows, and the rerun at `feeBps` 40.
+
+## What the two tests can and cannot do (measured on simulated data with no skill, before any real data)
+
+Measured with every true mean exactly zero; these are properties of the tests, not of any rule.
+
+| No-skill data | Search-adjusted p `< 0.05` (300 settings, 50 windows) | Confirmation p `< 0.01` (24 windows) |
+|---|---|---|
+| Independent, bell-shaped window returns | 5% | 0.5% |
+| Left-skewed (occasional larger losses) | 6% | 1.3% to 1.7% |
+| Right-skewed | 3% | 0.2% |
+| Half the windows without a trade | 2% | 0.6% |
+| Good and bad windows in runs (lag-1 autocorrelation 0.2) | 10% | 1.3% |
+| Left-skewed and in runs | 10% | 1.9% to 2.6% |
+
+So both tests are roughly as strict as they claim on well-behaved returns and up to about twice too lenient on
+skewed, serially dependent ones. The first version's tests were up to ten times too lenient on the same data,
+which is why they were replaced. Two limits no test on these windows can remove:
+
+- **Rare large losses.** A rule that gains a little in most windows and loses a lot in one window out of twenty
+  looks excellent in every sample that happens to contain no such loss; with 24 windows that is about three samples
+  in ten. The worst window and the skewness are reported so this shape can be seen, but an unseen loss cannot be.
+- **Low power for slow rules.** With 24 or 50 windows these tests can only detect a mean return of roughly half a
+  standard deviation per window or more. "Not confirmed" does not show a smaller positive mean is absent.
 
 ## Always reported, whatever the outcome
 
 - The default setting (seven-minute horizon, seven lookback, 10 bps buffer, no stop) on all 74 windows.
-- Per family: how many settings were eligible, how many had a positive design mean, the best `T` and its
-  reality-check p-value.
+- Per family: how many settings were eligible, how many had a positive design mean, how many distinct return
+  vectors the ten considered settings held, the best `T` with its skewness, autocorrelation and number of valid
+  windows, and its search-adjusted p-value.
 - The cost hurdle for every supported horizon: median absolute log move over the horizon against the round trip.
 - Coverage: minutes expected, observed and missing per asset and shared, per window; invalid windows; receipts.
-- Every deviation from this file, with its reason, under "Deviations" in `research/RESULTS.md`.
+- Every deviation from this file, with its reason, and the Readings above, in `research/RESULTS.md`, which the
+  study command writes together with `research/results/exploration.json`. A second run does not silently replace
+  an earlier record.
 
 ## What a result would and would not establish
 
@@ -144,7 +216,27 @@ A confirmed nominee means only that one setting, chosen on 2020 to 2023, also ha
 2023 to 2025 at these cost assumptions. It would justify writing a held-out contract for that setting and nothing
 more: not a trading edge, not executable fills, not future profit. Replay quotes are candle closes with an assumed
 spread; latency, queue position, market impact, taxes and funding are not modeled, and the fee assumption is one
-venue's published rate, not a measured cost. "Not confirmed" is bounded the same way: no setting among the 12,720
+venue's published rate, not a measured cost. "Not confirmed" is bounded the same way: no setting among the 13,200
 searched was confirmed on these windows at these costs. Either outcome is reported with the same prominence.
 
 Simulated cash only. No orders, keys, wallets or real-money path exist or are added.
+
+## Amendments
+
+**Amendment 1, 2026-11-19, before any exploration data was retrieved.** The first version (commit `5a82208`) was
+built and then attacked by independent verifier agents on synthetic data only. Their findings, and what changed:
+
+| Change | Reason |
+|---|---|
+| Family X has 2,400 settings (five horizons) and the total is 13,200; the first version said 1,920 and 12,720 | The table's own text ("horizons up to 60 minutes") includes the 60-minute horizon; its count did not. The text is kept and the counts corrected |
+| The score is multiplied by the autocorrelation factor | With no skill and window returns in runs (lag-1 autocorrelation 0.2), the search-adjusted p-value fell below 0.05 in about 18% of simulated studies without this factor and 10% with it |
+| The search-adjusted p-value re-studentizes inside each resample; the first version divided by the full-sample `sd` | A verifier measured the first version's p `< 0.05` in up to 61% of no-skill studies (and in as few as 1% when returns were right-skewed), depending on search width and skew. It was a flaw in the statistic, not in its code |
+| Eligibility requires at least 40 valid design windows | A setting with a handful of valid windows can own the maximum score by chance |
+| Identical return vectors count once in nomination; ties follow grid order | The "ten highest-scoring settings" often held only a few distinct rules, as few as two of ten (settings differing in a stop or buffer that never binds) |
+| The confirmation p-value is the larger of a t-test and a studentized resample, both on the adjusted score, and needs at least 20 valid windows; the first version used the t-test alone | The t-test alone passed 2% to 7% of no-skill nominees at a 1% level when returns were left-skewed or in runs |
+| The study refuses an incomplete or non-exchange candle store | A verifier ran the first build on a store holding 6 of 69 months; it reported nominees and "Deviations: none" |
+| Hold-through nominees are rerun through the patched engine; module hashes are recorded | The first build reported them with no engine comparison, and the record did not identify the code that produced it |
+| "Readings", the window-0 note and the "What the two tests can and cannot do" section are new text | The builders had to choose between readings in each of these places; the choices are now part of the protocol instead of living only in code |
+
+The data boundary, the windows, the design and confirmation sets, the simulation settings, the cost levels, the
+four rule-change definitions and the three confirmation labels are unchanged.
