@@ -3,8 +3,10 @@
 // strictly increasing) and the candle close. A market is {BTC: series, LINK: series}; missing minutes are absent.
 export const MINUTE = 60000, DAY = 86400000, ASSETS = ['BTC', 'LINK'];
 
+// minValidDesignWindows: "Eligible: the setting has at least 40 valid design windows" (Measures).
+// minValidConfirmationWindows: "Confirmed at default costs: at least 20 valid confirmation windows" (Confirmation).
 export const PROTOCOL = Object.freeze({from: Date.parse('2020-01-01T00:00:00Z'), windowDays: 28, windowCount: 74,
-  designCount: 50, minSharedFraction: 0.9});
+  designCount: 50, minSharedFraction: 0.9, minValidDesignWindows: 40, minValidConfirmationWindows: 20});
 
 // Window k covers minute closes from `from + 28k days` (00:00Z) through 23:59Z of its last day.
 export function protocolWindows(p = PROTOCOL) {
@@ -43,10 +45,13 @@ export function assertSeries(series, label = 'series') {
 // Everything setting-independent about one window. The app refuses a range whose exact boundary minute is
 // missing; the protocol instead scores from the first to the last minute observed for BOTH assets, so
 // scoreStart/scoreEnd are the first/last shared minute inside [start, end] and the frames are the shared minutes
-// between them (replay.js builds frames the same way: BTC rows whose timestamp LINK also has).
+// between them (replay.js builds frames the same way: BTC rows whose timestamp LINK also has). Reading 2: the
+// session ends at scoreEnd, which is earlier than `end` when the nominal last minute is missing for an asset.
 // `valid` is the protocol's window rule: at least minSharedFraction of the window's minutes observed for both
-// assets (and the two frames any run needs). A window that fails it is invalid for EVERY setting, and it is the
-// caller's job to drop it: the simulators run whatever window they are given as long as it has two frames.
+// assets (and the two frames any run needs). A window that fails it is invalid for EVERY setting. Reading 7 has
+// such a window dropped for every setting before any statistic is computed: that is the caller's job, done once
+// per window on this flag. The simulators compute no statistic and run whatever window they are given as long as
+// it has two frames, so a caller that looked only at a run's own `valid` would keep a low-coverage window.
 export function prepareWindow(market, {start, end}, p = PROTOCOL) {
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start % MINUTE || end % MINUTE || end < start)
     throw new Error('Window endpoints must be minute-close timestamps with end >= start');

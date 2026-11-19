@@ -1,42 +1,66 @@
-// The answer sheet: one window run through the REAL, unmodified engine. Simulated cash only.
+// The answer sheet: one window run through the REAL engine. Simulated cash only.
 //
 // Frames are built the way replay.js fetchHistoricalRange builds them after retrieval (per-asset rows kept from
 // scoreStart - warmupMinutes, the causal-warmup refusal, shared minutes as frames, a lazy history view of the last
 // lookback+1 rows) and ingested the way app.js start()/replayWork and backend replay.py run_replay do. This file
 // reads only scoreStart, scoreEnd and the shared count from the prepared window; it rebuilds frames from the
 // market itself, so it also checks the frame indexing that research/fastsim.mjs takes from prepareWindow.
+// PROTOCOL.md Readings 1 and 2: the window is run as if the app replayed [first shared minute, last shared minute].
 //
 // Family P is the engine as it is. Families R, X and L only change which prices the forecast sees, so they are
-// emulated by handing the unmodified engine a crafted frame.history:
+// emulated by handing the unmodified engine a crafted frame.history ("R, X and L by feeding it the history their
+// rule reads", PROTOCOL.md, Simulation):
 //   reversal      - the same rows with each price replaced by K/price (K = 1): log(last/past) flips sign.
 //   btcLed        - LINK's rows replaced by BTC's rows at that frame; quotes (anchor, fills) stay LINK's.
 //   long lookback - lookbackIntervals 1 with the two rows [past, last], or [last] alone when the rule says skip
 //                   (one row is fewer than lookbackIntervals + 1, which the engine skips as insufficient history).
 // Where emulation could differ from a native implementation:
-//   - reversal: log((K/last)/(K/past)) is -log(last/past) only up to rounding (about 1e-16 absolute), so the
-//     emulated drift can differ from the native -drift in its last bits. That can only matter for a comparison
-//     sitting exactly on a threshold (the buy test, the +-3% clip, the flat-direction epsilon). Zero drift and
-//     clipped drift are exact either way. No ledger arithmetic depends on the forecast value itself.
-//   - btcLed: drift arithmetic is identical. "BTC's forecast unavailable" is BTC's history being insufficient;
-//     a BTC stop on the same frame does not skip LINK. The app's warmup refusal is still applied to both
-//     assets' own series, although LINK's history is then unused.
-//   - long lookback: drift arithmetic is identical. The app's warmup rule and refusal are not applied (the
-//     protocol lets history reach back before the window); the engine config records lookbackIntervals 1.
-// holdThrough changes trading, not the forecast, and cannot be emulated this way: it throws here.
-import {createAccount, ingest, getSummary} from '../engine.js';
+//   - reversal: log((K/last)/(K/past)) is -log(last/past) only up to rounding (a verifier measured at most 3.6e-16
+//     absolute on tick-rounded prices), so the emulated drift can differ from the native -drift in its last bits.
+//     That can only matter for a comparison sitting exactly on a threshold (the buy test, the +-3% clip, the
+//     flat-direction epsilon); the verifier built two such cases (a buffer chosen to the last digit, and prices one
+//     ulp apart) in which the emulation makes no buy where the native rule buys. Zero drift and clipped drift are
+//     exact either way. No ledger arithmetic depends on the forecast value itself. A fills mismatch on a reversal
+//     run is therefore first a question about this emulation, not about the simulator.
+//   - btcLed: drift arithmetic is identical. Reading 4: "BTC's forecast is unavailable" is BTC's history being
+//     insufficient; a BTC stop on the same frame does not skip LINK; the app's warmup refusal is still applied
+//     to both assets' own series, although LINK's history is then unused.
+//   - long lookback: drift arithmetic is identical. The app's warmup rule and refusal are not applied (Reading 1;
+//     the protocol lets history reach back before the window); the engine config records lookbackIntervals 1.
+//     Reading 5: a past observation exactly 60 minutes older than wanted is used.
+// holdThrough changes trading, not the forecast, and cannot be emulated this way. It runs only on an engine passed
+// in by the caller: research/holdthrough-oracle.mjs loadHoldThroughEngine(), "the same engine with only its
+// scheduled-decision branch replaced" (PROTOCOL.md, Simulation). The frames are the same whichever engine runs.
+import {fileURLToPath} from 'node:url';
 import {MINUTE, ASSETS, lowerBound} from './windows.mjs';
+
+// The reference engine and the file it was loaded from, kept as one URL so that the path a caller hashes is the
+// module that ran.
+const ENGINE_URL = new URL('../engine.js', import.meta.url);
+export const ENGINE_FILE = fileURLToPath(ENGINE_URL);
+const UNMODIFIED = await import(ENGINE_URL.href);
 
 const FIXED = ['maxQuoteAgeMs', 'maxOutcomeLatenessMs', 'maxDrawdownBps', 'dailyLossBps', 'cashYieldBps'];
 const RECIPROCAL = 1;   // K in price -> K/price
 
-export function runEngine(market, prepared, setting, costs) {
+// engine = {createAccount, ingest, getSummary} replaces the unmodified engine. A holdThrough setting needs one (the
+// hold-through oracle), because the engine passed in IS the trading rule: setting.holdThrough itself changes
+// nothing here. Without an override, or with the unmodified engine's own ingest passed back in, it throws. The
+// reverse pairing cannot be checked here: an engine that holds through does so whatever the setting says, so the
+// caller passes it for hold-through settings only.
+export function runEngine(market, prepared, setting, costs, {engine} = {}) {
   for (const key of FIXED)
     if (setting[key] !== undefined || costs[key] !== undefined) throw new Error(`${key} is fixed by the protocol and cannot be set`);
   const {horizonMs, bufferBps, stopLossBps, holdThrough = false, reversal = false, btcLed = false,
     allocationFraction = 0.5, initialCash = 1000} = setting;
   const lookback = setting.lookback ?? undefined, spanMs = setting.spanMs ?? undefined;   // null means not given
   const {feeBps, slippageBps, halfSpreadBps} = costs;
-  if (holdThrough) throw new Error('holdThrough is not supported by runEngine: it changes trading and needs its own oracle');
+  if (engine != null && !['createAccount', 'ingest', 'getSummary'].every(name => typeof engine[name] === 'function'))
+    throw new Error('engine must be {createAccount, ingest, getSummary}');
+  const {createAccount, ingest, getSummary} = engine ?? UNMODIFIED;
+  if (holdThrough && ingest === UNMODIFIED.ingest)
+    throw new Error('holdThrough is not supported by runEngine on the unmodified engine: it changes trading and needs ' +
+      'its own oracle. Pass {engine} from research/holdthrough-oracle.mjs loadHoldThroughEngine()');
   if ((lookback === undefined) === (spanMs === undefined)) throw new Error('Give exactly one of lookback or spanMs');
   if (spanMs !== undefined && (!Number.isSafeInteger(spanMs) || spanMs <= 0)) throw new Error('spanMs must be a positive integer');
   if (typeof halfSpreadBps !== 'number' || !Number.isFinite(halfSpreadBps) || halfSpreadBps < 0 || halfSpreadBps > 1000)

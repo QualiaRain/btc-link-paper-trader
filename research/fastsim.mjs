@@ -9,6 +9,9 @@
 // decision cadence depends only on frame times and the horizon. So per (window, horizon, forecast rule, costs)
 // the decision schedule, each decision's expectedNetRatio and each forecast's outcome are computed once (`plan`),
 // and each setting then walks decisions only, visiting other frames just while a stop loss could fire.
+//
+// Where PROTOCOL.md could be read two ways, its "Readings" decide. Readings 1 to 5 are cited below at the line that
+// implements each; Reading 7 (low-coverage windows) is the caller's, see refusal().
 import {MINUTE, DAY, lowerBound} from './windows.mjs';
 
 const MAX_OUTCOME_LATENESS_MS = 30000;     // engine default, fixed by the protocol
@@ -54,13 +57,19 @@ function readCosts(costs) {
 }
 
 // Why a run does not exist for this setting, or null. The protocol's 90% coverage floor is NOT applied here: it
-// makes a window invalid for every setting (prepared.valid), which the caller checks once per window.
+// makes a window invalid for every setting (prepared.valid). Reading 7 has the caller drop such a window for every
+// setting before any statistic is computed; this file computes none and runs any window with two frames.
 function refusal(market, prepared, s) {
   if (prepared.shared < 2) return 'fewer than 2 shared minutes';   // no scored span: the engine needs durationMs > 0
   if (prepared.scoreEnd - prepared.scoreStart > 366 * DAY) fail('durationMs exceeds supported maximum');
-  if (s.spanMs !== undefined) return null;   // long lookback: the app's warmup rule does not apply
-  // app.js start(): warmupMinutes = max(60, 2*lookback+10); replay.js keeps rows from scoreStart - warmup and
-  // refuses unless each asset has lookback+1 of them at or before the scored start (which is itself observed).
+  if (s.spanMs !== undefined) return null;   // Reading 1: "Family L has no such refusal"
+  // Reading 1: "A window is run as if the app replayed [first shared minute, last shared minute]: each asset keeps
+  // rows from max(60, 2 x lookback + 10) minutes before the first shared minute, and the run is refused unless each
+  // asset has lookback + 1 rows at or before it" (app.js start() and replay.js; the first shared minute is itself
+  // one of the rows). Reading 4: under BTC-led the refusal "still applies to each asset's own series".
+  // The app's two other range refusals cannot bind on a window that passes the coverage floor: a scored span
+  // shorter than one horizon (90% of 28 days is 36,288 shared minutes; the longest horizon is 1,440) and a range
+  // over 31 days (a window is 28).
   const first = prepared.scoreStart - Math.max(60, 2 * s.lookback + 10) * MINUTE;
   for (const asset of ['BTC', 'LINK'])
     if (prepared.index[asset][0] - lowerBound(market[asset].time, first) + 1 < s.lookback + 1) return 'insufficient warmup';
@@ -82,7 +91,8 @@ function plan(market, prepared, s, c) {
     for (let a = 0; a < 2; a++) { ratio[a] = new Float64Array(n); outcome[a] = new Uint8Array(n); }
   }
   // Decision cadence (engine ingest): the first frame, then the first frame at least horizonMs after the last
-  // decision. endsAt is the last frame's time, so the last frame completes the run and never decides.
+  // decision. endsAt is the last frame's time, so the last frame completes the run and never decides (Reading 2:
+  // "The session ends at the window's last shared minute").
   let count = 0, lastDecisionAt = 0;
   for (let i = 0; i < n - 1; i++)
     if (count === 0 || times[i] - lastDecisionAt >= horizon) { schedule[count++] = i; lastDecisionAt = times[i]; }
@@ -95,10 +105,12 @@ function planAsset(market, prepared, s, c, a, asset) {
   const n = prepared.shared, times = prepared.times, endsAt = times[n - 1], horizon = s.horizonMs;
   const mid = prepared.close[asset], ratios = ratio[a], outcomes = outcome[a];
   // BTC-led: LINK's drift is BTC's drift at the same frame, from BTC's own history. Anchor and quotes stay LINK's.
+  // Reading 4: "BTC's forecast is unavailable" means BTC's drift cannot be computed from BTC's history, which is
+  // `usable` below read on BTC's rows; then LINK's decision is skipped.
   const source = s.btcLed ? 'BTC' : asset;
   const clock = market[source].time, price = market[source].close, row = prepared.index[source];
   const long = s.spanMs !== undefined;
-  // replay.js: history is the last lookback+1 rows of the series kept from scoreStart - warmupMinutes.
+  // replay.js: history is the last lookback+1 rows of the series kept from scoreStart - warmupMinutes (Reading 1).
   const oldest = long ? 0 : lowerBound(clock, prepared.scoreStart - Math.max(60, 2 * s.lookback + 10) * MINUTE);
   const sellFactor = (1 - c.half), sellSlip = (1 - c.slip), buyFactor = (1 + c.half), buySlip = (1 + c.slip);
   const feeDown = 1 - c.fee, feeUp = 1 + c.fee;
@@ -108,7 +120,8 @@ function planAsset(market, prepared, s, c, a, asset) {
     const i = schedule[k], time = times[i], last = row[i], targetAt = time + horizon;
     let usable;
     if (long) {
-      // Long lookback: the latest observation at or before time - span, if at most 60 minutes older than that.
+      // Long lookback: the latest observation at or before time - span, if at most 60 minutes older than that
+      // (Reading 5: exactly 60 minutes is included). Without one the decision is skipped (Reading 1).
       const wanted = time - s.spanMs;
       if (k === 0) past = lowerBound(clock, wanted + 1) - 1;
       else while (past + 1 < clock.length && clock[past + 1] <= wanted) past++;
@@ -118,6 +131,8 @@ function planAsset(market, prepared, s, c, a, asset) {
       usable = past >= oldest;
     }
     // engine: no prediction -> 'Insufficient ... history'; targetAt > endsAt -> 'Horizon extends past session end'.
+    // Reading 2: when the window's nominal last minute is missing for an asset the end is earlier, and "decisions
+    // whose horizon would pass it are skipped as the engine skips them". Only the end's time is read, no price.
     if (!usable || targetAt > endsAt) { ratios[k] = NaN; outcomes[k] = NONE; continue; }
     // engine prediction(): drift over the real elapsed time, clipped to +-3% per horizon.
     const elapsed = clock[last] - clock[past];
@@ -184,7 +199,8 @@ function run(prepared, s, c, detail) {
     if (qty[1] > 0) heldLINK++;
   };
   // The engine's buy test for one asset at decision k. A stopped asset is skipped before any forecast is made
-  // ('Stop loss: no same-frame reentry'), so the forecast planned for it is never issued.
+  // ('Stop loss: no same-frame reentry'), so the forecast planned for it is never issued. Only the asset's own
+  // stop counts (Reading 4: "A BTC stop-out on that frame does not skip LINK").
   const wantsBuy = (a, k) => {
     const planned = outcome[a][k];
     if (stopped[a]) { if (planned) lost[a * 5 + planned]++; return false; }
@@ -208,6 +224,11 @@ function run(prepared, s, c, detail) {
       // Hold-through (PROTOCOL.md): E is net liquidation value before any decision trade; sell held assets whose
       // test says cash (a skipped decision counts as cash); keep held assets whose test says buy; buy unheld
       // ones with min(allocationFraction x E, available cash), which is what the engine's buy fill does.
+      // Reading 3: E is read here, after this frame's stop-loss sales (made when the scan below reached this
+      // frame) and before the decision's own sells. "Held" is quantity above zero; an asset whose test says buy
+      // is not touched by the sells, so its quantity at its buy line is its quantity where E was read. A kept
+      // position keeps qty and basis as they are. A same-frame stop-out is a skipped decision (wantsBuy).
+      // "Available cash" is the cash on hand at that asset's buy (buy() caps the order by it).
       const btc = wantsBuy(0, k), link = wantsBuy(1, k), budget = allocation * netValue(i);
       if (!btc) sell(0, i);
       if (!link) sell(1, i);
@@ -273,7 +294,9 @@ function benchmark(mids, n, initial, c) {
 //   costs    = {feeBps, slippageBps, halfSpreadBps}.
 // Returns {valid: false, invalidReason} when no run exists for this setting: a lookback setting the app would
 // refuse for lack of causal warmup ('insufficient warmup'), or a window without two frames ('fewer than 2 shared
-// minutes'). The window-level coverage floor is prepared.valid and is left to the caller. Otherwise
+// minutes'). The window-level coverage floor is prepared.valid and is left to the caller (Reading 7). A long
+// lookback reads the market as far back as its span reaches; keeping those rows inside the exploration range is
+// the loader's job (research/dataset.mjs), not this file's. Otherwise
 //   {valid: true, invalidReason: null, finalValue, returnPct, buyHoldValue, buyHoldReturnPct, fills, fees, stops,
 //    decisions, perAsset: {BTC, LINK: {forecasts, settled, expired, directionHits, directionMisses, directionFlat,
 //    buys}}} and, with options.detail, maxDrawdownPct and exposure: {BTC, LINK}.

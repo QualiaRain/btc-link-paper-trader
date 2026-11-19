@@ -2,11 +2,12 @@
 // independent hold-through oracle (research/holdthrough-oracle.mjs: the real engine with only its scheduled-decision
 // branch swapped), for family H and for long lookback with hold-through (family L with its switch on).
 //
-// Frames are built as research/engine-run.mjs builds them, which is how replay.js builds them, and ingested by the
-// patched engine. Long lookback uses engine-run's crafted-history emulation: lookbackIntervals 1 with the two rows
-// [past, last], or [last] alone when the rule says skip. engine-run.mjs does not export its frame construction, so
-// it is repeated in replay() below, and every random case proves the copy: with hold-through off, these frames
-// through the unmodified engine must give exactly what runEngine gives.
+// Both sides of every comparison are named by the protocol (PROTOCOL.md, Simulation): the search runs on the fast
+// simulator, and "hold-through nominees [are rerun] through research/holdthrough-oracle.mjs, which is the same engine
+// with only its scheduled-decision branch replaced". The oracle runs through research/engine-run.mjs runEngine with
+// the patched engine passed in, so its frames are built by the same code as every other engine run (as replay.js
+// builds them). Long lookback uses runEngine's crafted-history emulation: lookbackIntervals 1 with the two rows
+// [past, last], or [last] alone when the rule says skip.
 //
 // The oracle's ledger is also read back (audit() below) to show what the compared runs contained: kept positions,
 // sells on buy-to-cash and on skipped decisions, stop-outs of kept positions, and buys sized from E, not from cash.
@@ -15,7 +16,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as engine from '../engine.js';
-import {MINUTE, ASSETS, lowerBound, prepareWindow} from './windows.mjs';
+import {MINUTE, ASSETS, prepareWindow} from './windows.mjs';
 import {simulate, simulateGrid} from './fastsim.mjs';
 import {runEngine} from './engine-run.mjs';
 import {loadHoldThroughEngine} from './holdthrough-oracle.mjs';
@@ -23,80 +24,17 @@ import {mulberry32, syntheticMarket, sampleMarket} from './synthetic.mjs';
 
 const holdThrough = await loadHoldThroughEngine();
 
-// One window through an engine ({createAccount, ingest, getSummary}): engine-run.mjs runEngine with the engine
-// passed in, less its reversal and BTC-led emulations. setting.holdThrough is not read: the engine passed in is
-// the rule. Returns {result} in runEngine's shape, plus the account and frames when a run exists.
+// One window through an engine ({createAccount, ingest, getSummary}) by runEngine, which builds the frames. The
+// engine passed in is the rule: the patched engine holds through, the unmodified one does not. It is wrapped only
+// to keep what audit() reads, the account and the frames it was fed. Returns {result} in runEngine's shape, with
+// the account (null when no run exists) and the frames.
 function replay(api, market, prepared, setting, costs) {
-  const {horizonMs, bufferBps, stopLossBps, allocationFraction = 0.5, initialCash = 1000} = setting;
-  const lookback = setting.lookback ?? undefined, spanMs = setting.spanMs ?? undefined;
-  const {feeBps, slippageBps, halfSpreadBps} = costs;
-  if (prepared.shared < 2) return {result: {valid: false, invalidReason: 'fewer than 2 shared minutes'}};
-  const s = prepared.scoreStart, e = prepared.scoreEnd, long = spanMs !== undefined;
-  const lookbackIntervals = long ? 1 : lookback;
-  // app.js start(): warmupMinutes, historyLimit and requiredHistory of a range replay.
-  const warmupMinutes = Math.max(60, 2 * lookbackIntervals + 10), historyLimit = lookbackIntervals + 1;
-  // replay.js keeps rows from s - warmupMinutes; long lookback keeps them back to the oldest row the rule could use.
-  const first = long ? s - spanMs - 60 * MINUTE : s - warmupMinutes * MINUTE;
-  const series = {}, clock = {};
-  for (const asset of ASSETS) {
-    const {time, close} = market[asset], from = lowerBound(time, first), to = lowerBound(time, e + 1);
-    series[asset] = Array.from({length: to - from}, (_, i) => ({time: time[from + i], price: close[from + i]}));
-    clock[asset] = time.subarray(from, to);
-  }
-  // replay.js: no run unless lookback+1 causal observations exist at the scored start. Not applied to long lookback.
-  if (!long) for (const asset of ASSETS)
-    if (series[asset].filter(row => row.time <= s).length < lookbackIntervals + 1)
-      return {result: {valid: false, invalidReason: 'insufficient warmup'}};
-  const rows = (asset, at, time) => {
-    if (!long) return series[asset].slice(Math.max(0, at - historyLimit + 1), at + 1);   // replay.js, verbatim
-    // Long lookback: the latest observation at or before time - span, if at most 60 minutes older than that.
-    const wanted = time - spanMs, past = lowerBound(clock[asset], wanted + 1) - 1;
-    const usable = past >= 0 && wanted - clock[asset][past] <= 60 * MINUTE;
-    return usable ? [series[asset][past], series[asset][at]] : [series[asset][at]];
-  };
-  // replay.js frame construction: BTC rows in [s, e] that LINK also has, assumed quotes around the close, and the
-  // history as a lazy getter.
-  const maps = Object.fromEntries(ASSETS.map(a => [a, new Map(series[a].map((r, i) => [r.time, i]))]));
-  const frames = [], half = halfSpreadBps / 10000;
-  for (const row of series.BTC) {
-    if (row.time < s || row.time > e || !maps.LINK.has(row.time)) continue;
-    const indices = {BTC: maps.BTC.get(row.time), LINK: maps.LINK.get(row.time)}, quotes = {};
-    for (const a of ASSETS) {
-      const mid = series[a][indices[a]].price;
-      quotes[a] = {bid: mid * (1 - half), ask: mid * (1 + half), mid, observedAt: row.time,
-        source: `Historical Coinbase close with ASSUMED ${halfSpreadBps} bps half-spread`, simulatedQuote: true};
-    }
-    const frame = {time: row.time, quotes};
-    Object.defineProperty(frame, 'history', {enumerable: true,
-      get: () => Object.fromEntries(ASSETS.map(a => [a, rows(a, indices[a], row.time)]))});
-    frames.push(frame);
-  }
-  assert.ok(frames.length && frames[0].time === s && frames.at(-1).time === e, 'scored boundary frames are missing');
-  // app.js start() / replay.py run_replay: the scored span is the duration; ingest until the account completes.
-  const account = api.createAccount({initialCash, horizonMs, feeBps, slippageBps, bufferBps, model: 'trend', mode: 'replay',
-    durationMs: e - s, maxQuoteAgeMs: 60000, maxOutcomeLatenessMs: 30000, lookbackIntervals, allocationFraction,
-    stopLossBps, maxDrawdownBps: 0, dailyLossBps: 0, cashYieldBps: 0});
-  const held = {BTC: 0, LINK: 0};
-  for (const frame of frames) {
-    api.ingest(account, frame);
-    for (const a of ASSETS) if (account.positions[a].qty > 0) held[a]++;
-    if (account.status === 'completed') break;
-  }
-  const summary = api.getSummary(account), ledger = account.ledger;
-  const trades = ledger.filter(ev => ev.type === 'trade' && ev.actor !== 'benchmark');
-  const decisionFrames = new Set(ledger.filter(ev => ev.type === 'decision' || ev.type === 'decision_skipped').map(ev => ev.time));
-  const perAsset = Object.fromEntries(ASSETS.map(a => {
-    const forecasts = account.forecasts.filter(f => f.asset === a), counts = summary.perAsset[a];
-    return [a, {forecasts: forecasts.length, settled: counts.count,
-      expired: forecasts.filter(f => f.status === 'expired').length, directionHits: counts.directionHits,
-      directionMisses: counts.directionMisses, directionFlat: counts.directionFlat,
-      buys: trades.filter(t => t.asset === a && t.side === 'buy').length}];
-  }));
-  return {account, frames, result: {valid: true, invalidReason: null, finalValue: summary.equity, returnPct: summary.returnPct,
-    buyHoldValue: summary.buyHoldEquity, buyHoldReturnPct: summary.buyHoldReturnPct, fills: summary.tradeCount,
-    fees: summary.fees, stops: ledger.filter(ev => ev.type === 'stop_loss').length, decisions: decisionFrames.size,
-    perAsset, maxDrawdownPct: summary.maxDrawdownPct,
-    exposure: {BTC: held.BTC / frames.length, LINK: held.LINK / frames.length}}};
+  const seen = {account: null, frames: []};
+  const recording = {createAccount: config => (seen.account = api.createAccount(config)),
+    ingest: (account, frame) => { seen.frames.push(frame); return api.ingest(account, frame); },
+    getSummary: api.getSummary};
+  const result = runEngine(market, prepared, setting, costs, {engine: recording});
+  return {...seen, result};
 }
 
 // What must agree (PROTOCOL.md, "Simulation": exact for counts, 1e-9 relative for floats): fills, stops, decisions
@@ -195,10 +133,13 @@ function audit(account, frames, seen, label) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Hand-built runs: one per sentence of the protocol's hold-through paragraph, with the expected numbers worked out
-// by hand. No spread, no slippage, a 10 bps fee each way, a 10 bps buffer, a one-observation lookback: the engine's
-// test says buy after a minute that rose about 1% and cash after a flat or falling one. $1,000 at the start, so the
-// first buy spends $500, fee included, which is 500 / 1.001 / 100 BTC at a close of 100.
+// Hand-built runs: one per sentence of the protocol's hold-through paragraph and of its Reading 3, with the expected
+// numbers worked out by hand. No spread, no slippage, a 10 bps fee each way, a 10 bps buffer, a one-observation
+// lookback: the engine's test says buy after a minute that rose about 1% and cash after a flat or falling one.
+// $1,000 at the start, so the first buy spends $500, fee included, which is 500 / 1.001 / 100 BTC at a close of 100.
+// One sentence of Reading 3 has no test because no comparison at 1e-9 can tell its two readings apart: "E is read
+// after that frame's stop-loss sales". A stop-loss sale turns a position into exactly the cash E counted it at, so
+// E read before or after it differs by rounding only (a verifier measured at most 1.7e-15 relative).
 
 const T0 = Date.UTC(2024, 4, 1), FEE = 0.001, QTY = 500 / (1 + FEE) / 100;
 const TINY_COSTS = {feeBps: 10, slippageBps: 0, halfSpreadBps: 0};
@@ -296,6 +237,25 @@ test('hand-built: a decision whose horizon passes the session end sells a held a
   assert.deepEqual([fast.decisions, fast.fills, fast.perAsset.BTC.forecasts], [2, 2, 1]);
   near(fast.finalValue, 500 + QTY * 102 * (1 - FEE), 'final value');
   agree(fast, unmodified, 'the position the engine would be in');
+});
+
+test('hand-built, outside the protocol\'s inputs: "held" means quantity above zero, and an order of 1e-10 dollars or less is not made', () => {
+  // BTC near 30,000 rises 1% into each of three decisions. With an allocation of 2e-13 of $1,000 each buy spends
+  // 2e-10 dollars on 6.7e-15 BTC, a position the engine sets to nothing (under 1e-14 units). At the next decision
+  // nothing is held, so it is bought again, not kept: three buys, no sale, never held. The protocol's allocation is
+  // one half; this size only shows that the simulator's "held" is the engine's quantity above zero.
+  const closes = [29700, 30000, 30300, 30603, 30603];
+  const wiped = tiny({horizonMs: MINUTE, allocationFraction: 2e-13}, closes);
+  assert.ok(1000 * 2e-13 > 1e-10 && 1000 * 2e-13 / 30000 < 1e-14);
+  assert.deepEqual([wiped.fast.decisions, wiped.fast.fills, wiped.fast.perAsset.BTC.buys, wiped.fast.exposure.BTC], [3, 3, 3, 0]);
+  assert.ok(wiped.fast.finalValue < 1000 && wiped.fast.finalValue > 1000 - 1e-9);
+  assert.equal(wiped.unmodified.fills, 3);
+  // An allocation of 5e-14: orders of 5e-11 dollars are not made at all.
+  const none = tiny({horizonMs: MINUTE, allocationFraction: 5e-14}, closes);
+  assert.deepEqual([none.fast.decisions, none.fast.fills, none.fast.perAsset.BTC.forecasts, none.fast.finalValue], [3, 0, 3, 1000]);
+  // At the protocol's one half the same closes buy once and keep the position through both later decisions.
+  const kept = tiny({horizonMs: MINUTE}, closes);
+  assert.deepEqual([kept.fast.fills, kept.fast.perAsset.BTC.buys, kept.fast.exposure.BTC, kept.unmodified.fills], [2, 1, 0.75, 6]);
 });
 
 test('hand-built, long lookback: a decision skipped for insufficient history sells a held asset; the rebuy is sized from E', () => {
@@ -433,9 +393,10 @@ function fuzz(family, count, seed) {
     assert.deepEqual(simulate(m.market, prepared, setting, costs), common, `${label}: plain and detailed runs differ`);
     const grid = simulateGrid(m.market, prepared, [setting, plain, setting], costs);
     assert.deepEqual([grid[0], grid[2]], [common, common], `${label}: simulateGrid differs`);
-    // The frames built here are engine-run's: with hold-through off, the unmodified engine gives runEngine's result.
+    // Passing an engine swaps the engine and nothing else: the unmodified engine passed in, with hold-through off,
+    // gives runEngine's own result.
     const unmodified = runEngine(m.market, prepared, plain, costs);
-    assert.deepEqual(replay(engine, m.market, prepared, plain, costs).result, unmodified, `${label}: frames differ from engine-run's`);
+    assert.deepEqual(replay(engine, m.market, prepared, plain, costs).result, unmodified, `${label}: an engine passed in changed the run`);
 
     seen.cases++;
     if (!fast.valid) { if (fast.invalidReason === 'insufficient warmup') seen.refused++; else seen.tooShort++; continue; }
@@ -530,7 +491,7 @@ test('dense tiny runs: markets of a few minutes in which almost every decision b
     assert.deepEqual(simulateGrid(market, prepared, [setting, plain, setting], costs).filter((_, at) => at !== 1), [common, common],
       `${label}: simulateGrid differs`);
     assert.deepEqual(replay(engine, market, prepared, plain, costs).result, runEngine(market, prepared, plain, costs),
-      `${label}: frames differ from engine-run's`);
+      `${label}: an engine passed in changed the run`);
     if (!fast.valid) continue;
     ran++; fills += fast.fills; stops += fast.stops;
     audit(oracle.account, oracle.frames, seen, label);

@@ -7,8 +7,10 @@
 import {MINUTE} from './windows.mjs';
 
 export const FAMILIES = Object.freeze(['P', 'H', 'R', 'X', 'L']);
-// The counts in the protocol table. familySettings() refuses to return a grid of any other size.
-export const FAMILY_SIZE = Object.freeze({P: 3360, H: 3360, R: 3360, X: 1920, L: 720});
+// The counts in the protocol table as amended (Amendment 1: family X has five horizons, 2,400 settings, and the
+// total is 13,200). familySettings() refuses to return a grid of any other size.
+export const FAMILY_SIZE = Object.freeze({P: 3360, H: 3360, R: 3360, X: 2400, L: 720});
+export const TOTAL_SETTINGS = 13200;
 
 // Every horizon the app accepts (configuration.js HORIZONS), in minutes.
 export const HORIZON_MINUTES = Object.freeze([1, 5, 7, 15, 60, 420, 1440]);
@@ -17,14 +19,12 @@ const BUFFERS = [0, 5, 10, 20, 40, 80, 160, 320];
 const STOPS = [0, 100, 300, 1000];
 const lookbackAxes = horizonMinutes => ({horizonMinutes, lookback: LOOKBACKS, bufferBps: BUFFERS, stopLossBps: STOPS});
 
-// Family X: the table says "horizons up to 60 minutes" and 1,920 settings. 1,920 = 4 x 15 x 8 x 4, so the count
-// (on which the protocol's total of 12,720 rests) fixes FOUR horizons; "up to 60 minutes" is therefore read as
-// below 60 minutes: 1, 5, 7 and 15. Including 60 would give 2,400 settings. Reported as an ambiguity.
+// Family X: "P for the five horizons up to 60 minutes {1, 5, 7, 15, 60}": 5 x 15 x 8 x 4 = 2,400 settings.
 export const AXES = Object.freeze({
   P: lookbackAxes(HORIZON_MINUTES),
   H: lookbackAxes(HORIZON_MINUTES),
   R: lookbackAxes(HORIZON_MINUTES),
-  X: lookbackAxes([1, 5, 7, 15]),
+  X: lookbackAxes([1, 5, 7, 15, 60]),
   // 4h, 8h, 12h, 1d, 2d, 3d, 5d, 7d, 14d, 28d, in minutes.
   L: {spanMinutes: [240, 480, 720, 1440, 2880, 4320, 7200, 10080, 20160, 40320], horizonMinutes: [60, 420, 1440],
     bufferBps: [0, 20, 80, 320], stopLossBps: [0, 300, 1000], holdThrough: [false, true]},
@@ -62,18 +62,17 @@ export function familySettings(family) {
   return settings;
 }
 
-// All five families in the order P, H, R, X, L: 12,720 settings.
+// All five families in the order P, H, R, X, L: "13,200 settings in all".
 export function allSettings() {
   const settings = FAMILIES.flatMap(familySettings);
-  if (settings.length !== 12720) throw new Error(`${settings.length} settings enumerated, the protocol says 12,720`);
+  if (settings.length !== TOTAL_SETTINGS) throw new Error(`${settings.length} settings enumerated, the protocol says 13,200`);
   return settings;
 }
 
-// The protocol's neighbours of a setting among `all`: "one grid step either way in lookback and in buffer; same
-// horizon, stop and switches". Read as the up-to-four settings that differ by exactly one step on the lookback
-// axis (the span axis for family L) or by exactly one step on the buffer axis, everything else equal. A setting
-// one step away on both axes is two steps away and is not a neighbour. Settings on the border of the grid, or
-// whose neighbours are missing from `all`, have fewer. Returned in the order of `all`.
+// The protocol's neighbours of a setting among `all` (Reading 6): "the up to four settings one grid step away on
+// exactly one of the two axes (lookback or span, and buffer), same horizon, stop and switches. They count whether
+// or not they are eligible." A setting one step away on both axes is not a neighbour. Settings at the end of an
+// axis, or whose neighbours are missing from `all` (a subset in a test), have fewer. Returned in the order of `all`.
 export function neighbours(setting, all) {
   const axis = setting.family === 'L' ? 'span' : 'lookback';
   if (!Number.isInteger(setting.grid?.[axis]) || !Number.isInteger(setting.grid.buffer))

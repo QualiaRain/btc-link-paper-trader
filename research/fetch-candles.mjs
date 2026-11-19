@@ -15,34 +15,49 @@
 //     shared row is compared (`conflicting duplicate candle`);
 //   * row validation and the duplicate comparison, character for character;
 //   * HTTP 429 and 5xx, network errors and timeouts are retried with backoff*2**attempt; other statuses and
-//     invalid JSON fail at once; a receipt {url, receivedAt, httpDate, sha256, attempts} is kept per response.
+//     invalid JSON fail at once; a receipt {url, receivedAt, httpDate, sha256, rowCount, attempts} is kept per
+//     stored response.
 // Deliberate differences from replay.js, each forced by the guard or by the task:
 //   * replay.js clips its last chunk at `e`, the end CLOSE, which read as a bucket start is one bucket past the
 //     last wanted one (a row it then drops with `time>e`). For the final month that bucket is the first reserved
 //     one, so every month's last chunk is clipped at its last wanted bucket instead. Nothing outside [from, to) is
-//     ever requested.
+//     ever requested. This relies on the exchange reading `end` as inclusive, which cannot be checked offline, so
+//     each month records whether its last wanted bucket came back and a warning line is printed when it did not.
 //   * rows are filtered per request: a valid in-bounds row outside the chunk that was asked for is ignored the
 //     way replay.js ignores rows outside its range (`if(time<first||time>e)continue;`), so every stored row was
 //     returned by a request that asked for it, and that request's receipt holds the body hash.
 //   * work is month by month per asset (resumable), the two assets run as two concurrent request streams, the
 //     receipt hash covers the raw body bytes and carries rowCount, redirects are not followed, and the retry
 //     count, pause and backoff are parameters.
+//   * an empty answer (HTTP 200, `[]`) is stored as what it is, no rows: nothing is filled in and the month does
+//     not fail. Each month records how many of its answers were empty.
+//
+// LIMITS ON WAITING AND RETRYING. Node turns a timer above 2**31-1 ms into a 1 ms timer, so an unbounded wait would
+// become no wait at all. No single wait (pause, retry backoff, Retry-After, request timeout) is longer than
+// MAX_WAIT_MS, 5 minutes: larger options are refused, and a larger Retry-After is waited for 5 minutes and logged.
+// The public exchange is never asked again sooner than 200 ms, between requests or between attempts of one request,
+// and one request is attempted at most 10 times. A loopback test server is exempt from the 200 ms floor and from
+// the 10-attempt ceiling, not from the 5 minute maximum.
 import {mkdirSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {dirname} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
-import {ASSETS, DEFAULT_DIR, EXPLORATION_FROM, FORMAT, MINUTE, RESERVED_FROM, ROW_BYTES, assertBucketAllowed,
+import {ASSETS, DEFAULT_DIR, EXPLORATION_FROM, FORMAT, MINUTE, RESERVED_FROM, ROW_BYTES, SOURCE, assertBucketAllowed,
   manifestBounds, manifestPath, monthKey, monthPaths, monthRange, readManifest, readMonth, sha256Hex} from './dataset.mjs';
 
+export {SOURCE};                            // defined in dataset.mjs, where storeCompleteness compares it
 export const COINBASE_URL = 'https://api.exchange.coinbase.com';
-export const SOURCE = 'Coinbase Exchange public completed one-minute candles (https://api.exchange.coinbase.com)';
 export const LOOPBACK_SOURCE = 'Loopback test server: synthetic candles, not market data';
+export const MAX_WAIT_MS = 5 * MINUTE;      // the longest single wait, whatever asked for it
 const CHUNK = 299 * MINUTE;                 // replay.js: `t+=299*MINUTE`
-const MIN_PUBLIC_PAUSE_MS = 200;
+const MIN_PUBLIC_WAIT_MS = 200;             // public host: shortest pause between requests and shortest retry backoff
+const MAX_PUBLIC_ATTEMPTS = 10;             // public host: most attempts for one request
 const STOPPED = Symbol('another stream failed');
 
 const iso = t => new Date(t).toISOString();
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Every wait goes through here, clamped to MAX_WAIT_MS however it was computed (the option checks and
+// retryDelayMs already keep every caller below it).
+const sleep = ms => new Promise(resolve => setTimeout(resolve, Math.min(ms, MAX_WAIT_MS)));
 const utf8 = new TextDecoder();
 
 // A UTC date YYYY-MM-DD naming a bucket start (00:00:00Z of that day).
@@ -86,18 +101,23 @@ function planMonths(fromMs, toMs) {
   return plans;
 }
 
-// backoffMs*2**attempt as in replay.js (`wait(500*2**attempt)`), or a numeric Retry-After (seconds) when larger.
+// A numeric Retry-After header (seconds) in milliseconds; NaN for anything else (an HTTP date is not honoured).
+const retryAfterMs = header => (typeof header === 'string' && /^\s*\d+(\.\d+)?\s*$/.test(header) ? Number(header) * 1000 : NaN);
+// backoffMs*2**attempt as in replay.js (`wait(500*2**attempt)`).
+const backoffDelayMs = (attempt, backoffMs) => (backoffMs > 0 ? backoffMs * 2 ** attempt : 0);
+
+// The wait before the next attempt: the backoff, or a numeric Retry-After when that is larger, and never more
+// than MAX_WAIT_MS (see LIMITS above: an uncapped value past 2**31-1 ms would be retried at once).
 export function retryDelayMs(attempt, backoffMs, retryAfter) {
-  const backoff = backoffMs * 2 ** attempt;
-  const seconds = typeof retryAfter === 'string' && /^\s*\d+(\.\d+)?\s*$/.test(retryAfter) ? Number(retryAfter) : NaN;
-  return seconds * 1000 > backoff ? seconds * 1000 : backoff;
+  const backoff = backoffDelayMs(attempt, backoffMs), asked = retryAfterMs(retryAfter);
+  return Math.min(MAX_WAIT_MS, asked > backoff ? asked : backoff);
 }
 
 function writeAtomic(path, data) {
   mkdirSync(dirname(path), {recursive: true});
   const temporary = `${path}.tmp`;
   try { writeFileSync(temporary, data); renameSync(temporary, path); }
-  catch (error) { rmSync(temporary, {force: true}); throw error; }
+  catch (error) { try { rmSync(temporary, {force: true}); } catch {} throw error; }
 }
 
 const duration = ms => {
@@ -107,7 +127,7 @@ const duration = ms => {
 };
 
 // Fetch [from, to) (UTC dates naming bucket starts; from inclusive, to exclusive) into `dir`, month by month per
-// asset. Complete months whose stored range covers the wanted one and whose file still matches the manifest are
+// asset. Complete months whose stored range covers the wanted one and whose two files still match the manifest are
 // skipped without a request; everything else is fetched again and replaced. Resolves to a summary; rejects on the
 // first failure, leaving every month completed so far in place.
 export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', assets = ASSETS, dir = DEFAULT_DIR,
@@ -122,11 +142,15 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
   if (!Array.isArray(assets) || !assets.length || new Set(assets).size !== assets.length || !assets.every(a => ASSETS.includes(a)))
     throw new Error(`assets must be a non-empty list without repeats from ${ASSETS.join(', ')}`);
   if (typeof dir !== 'string' || !dir) throw new Error('dir must be a path');
-  if (typeof pauseMs !== 'number' || !Number.isFinite(pauseMs) || pauseMs < 0) throw new Error('pauseMs must be a number of at least 0');
-  if (!base.loopback && pauseMs < MIN_PUBLIC_PAUSE_MS) throw new Error(`pauseMs below ${MIN_PUBLIC_PAUSE_MS} is refused for the public exchange`);
+  // Waits: each a finite number inside [0, MAX_WAIT_MS] (see LIMITS above), with a floor for the public host.
+  const within = (value, least) => typeof value === 'number' && Number.isFinite(value) && value >= least && value <= MAX_WAIT_MS;
+  if (!within(pauseMs, 0)) throw new Error(`pauseMs must be a number from 0 to ${MAX_WAIT_MS} (5 minutes)`);
+  if (!base.loopback && pauseMs < MIN_PUBLIC_WAIT_MS) throw new Error(`pauseMs below ${MIN_PUBLIC_WAIT_MS} is refused for the public exchange`);
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1) throw new Error('maxAttempts must be a positive integer');
-  if (typeof backoffMs !== 'number' || !Number.isFinite(backoffMs) || backoffMs < 0) throw new Error('backoffMs must be a number of at least 0');
-  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive number');
+  if (!base.loopback && maxAttempts > MAX_PUBLIC_ATTEMPTS) throw new Error(`maxAttempts above ${MAX_PUBLIC_ATTEMPTS} is refused for the public exchange`);
+  if (!within(backoffMs, 0)) throw new Error(`backoffMs must be a number from 0 to ${MAX_WAIT_MS} (5 minutes)`);
+  if (!base.loopback && backoffMs < MIN_PUBLIC_WAIT_MS) throw new Error(`backoffMs below ${MIN_PUBLIC_WAIT_MS} is refused for the public exchange`);
+  if (!within(timeoutMs, 0) || timeoutMs === 0) throw new Error(`timeoutMs must be a positive number of at most ${MAX_WAIT_MS} (5 minutes)`);
   if (typeof fetchImpl !== 'function' || typeof log !== 'function') throw new Error('fetchImpl and log must be functions');
 
   // ---- plan: which months, which chunks, which are already complete
@@ -141,8 +165,13 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
         note[`${asset} ${plan.month}`] = ' (refetched: the stored range did not cover the wanted one)';
         return true;
       }
+      // A month is kept only when its entry binds a receipts file and both files still match it (readMonth).
+      if (typeof entry.receiptsSha256 !== 'string') {
+        note[`${asset} ${plan.month}`] = ' (refetched: the manifest entry bound no receipts)';
+        return true;
+      }
       try { readMonth(dir, asset, plan.month, entry); return false; }
-      catch { note[`${asset} ${plan.month}`] = ' (refetched: the stored file did not match the manifest)'; return true; }
+      catch { note[`${asset} ${plan.month}`] = ' (refetched: the stored files did not match the manifest)'; return true; }
     });
     for (const plan of todo[asset]) for (const [start, end] of plan.chunks) candleUrl(base.origin, asset, start, end);
   }
@@ -154,6 +183,8 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
   async function request(url, label) {
     for (let attempt = 0; ; attempt++) {
       if (stop.error) throw STOPPED;
+      // The timer stays armed until the whole body has been read, so a server that sends its headers and then
+      // stalls is cut off like one that never answers.
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
       let failure = null, retryAfter = null;
       try {
@@ -166,8 +197,9 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
           retryAfter = response.headers.get('retry-after');
         } else {
           let rows;
+          // A fixed text: the parser's own message quotes the body, and no response text belongs in an error.
           try { rows = JSON.parse(utf8.decode(body)); }
-          catch (error) { failure = new Error(`invalid JSON (${error.message})`); failure.retryable = false; }
+          catch { failure = new Error(`invalid JSON (${body.length} bytes)`); failure.retryable = false; }
           if (!failure) return {rows, retries: attempt, receipt: {url, receivedAt: Date.now(), httpDate: response.headers.get('date'),
             sha256: sha256Hex(body), rowCount: Array.isArray(rows) ? rows.length : 0, attempts: attempt + 1}};
         }
@@ -177,11 +209,17 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
       } finally { clearTimeout(timer); }
       if (attempt === maxAttempts - 1 || failure.retryable === false)
         throw new Error(`${label}: ${failure.message} on attempt ${attempt + 1} of ${maxAttempts}: ${url}`);
-      await sleep(retryDelayMs(attempt, backoffMs, retryAfter));
+      // The next attempt is never sooner than the stream's own pause, and a wait the server asked for is logged:
+      // it can last minutes, during which nothing else is printed for this asset.
+      const asked = retryAfterMs(retryAfter), wait = Math.max(pauseMs, retryDelayMs(attempt, backoffMs, retryAfter));
+      if (asked > backoffDelayMs(attempt, backoffMs))
+        log(`${label}: ${failure.message}; Retry-After asks for ${retryAfter.trim()} s${asked > MAX_WAIT_MS ? `, more than the ${duration(MAX_WAIT_MS)} maximum` : ''}: ` +
+          `waiting ${duration(wait)} before attempt ${attempt + 2} of ${maxAttempts}`);
+      await sleep(wait);
     }
   }
 
-  function store(asset, plan, seen, receipts, duplicates) {
+  function store(asset, plan, seen, receipts, duplicates, emptyResponses) {
     const times = [...seen.keys()].sort((a, b) => a - b), bytes = Buffer.alloc(times.length * ROW_BYTES);
     times.forEach((time, i) => {
       const bucket = assertBucketAllowed(time - MINUTE, `${asset} ${plan.month} row to store`);
@@ -189,24 +227,28 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
       const [, low, high, open, close, volume] = seen.get(time);
       [time, low, high, open, close, volume].forEach((value, j) => bytes.writeDoubleLE(value, i * ROW_BYTES + j * 8));
     });
-    const files = monthPaths(dir, asset, plan.month);
-    writeAtomic(files.receipts, receipts.map(receipt => JSON.stringify(receipt) + '\n').join(''));
+    const files = monthPaths(dir, asset, plan.month), receiptBytes = Buffer.from(receipts.map(receipt => JSON.stringify(receipt) + '\n').join(''));
+    // Candles, then receipts, then the manifest entry that binds both by SHA-256. A stop between any two of the
+    // three writes leaves a file that disagrees with the entry on disk (or no entry), which readMonth refuses and
+    // the next run refetches; receipts are never left describing another fetch than the stored rows unnoticed.
     writeAtomic(files.candles, bytes);
-    (manifest.assets[asset] ??= {months: {}}).months[plan.month] = {rows: times.length, firstClose: times[0] ?? null,
-      lastClose: times.at(-1) ?? null, sha256: sha256Hex(bytes), requests: receipts.length, fetchedAt: iso(Date.now()),
+    writeAtomic(files.receipts, receiptBytes);
+    const entry = (manifest.assets[asset] ??= {months: {}}).months[plan.month] = {rows: times.length, firstClose: times[0] ?? null,
+      lastClose: times.at(-1) ?? null, sha256: sha256Hex(bytes), requests: receipts.length, receipts: receipts.length,
+      receiptsSha256: sha256Hex(receiptBytes), emptyResponses, lastBucketPresent: seen.has(plan.to), fetchedAt: iso(Date.now()),
       complete: true, from: iso(plan.from), to: iso(plan.to), duplicateRows: duplicates};
     // The manifest is rewritten after every month, assets and months in a fixed order whatever finished first.
     const sorted = Object.fromEntries(ASSETS.filter(a => manifest.assets[a]).map(a => [a, {months:
       Object.fromEntries(Object.keys(manifest.assets[a].months).sort().map(month => [month, manifest.assets[a].months[month]]))}]));
     writeAtomic(manifestPath(dir), JSON.stringify({...manifest, assets: sorted}, null, 2) + '\n');
-    return times.length;
+    return entry;
   }
 
   // One sequential request stream per asset; pauseMs separates its requests (replay.js: `if(completed)await wait(350)`).
   async function stream(asset) {
     for (const plan of todo[asset]) {
       const seen = new Map(), receipts = [], label = `${asset} ${plan.month}`;
-      let duplicates = 0, retries = 0;
+      let duplicates = 0, retries = 0, empty = 0;
       for (const [start, end] of plan.chunks) {
         if (stop.error) throw STOPPED;
         if (requests[asset]++ && pauseMs > 0) await sleep(pauseMs);
@@ -214,6 +256,7 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
         // From here to the duplicate check: replay.js, with the guard and the per-request filter added. Messages
         // name the month and the request, never a price.
         if (!Array.isArray(rows)) throw new Error(`${asset}: invalid candle response (${plan.month}): ${url}`);
+        if (!rows.length) empty++;
         for (const row of rows) {
           if (!Array.isArray(row) || row.length !== 6) throw new Error(`${asset}: invalid candle row (${plan.month}): ${url}`);
           const [bucket, low, high, open, close, volume] = row;
@@ -231,19 +274,33 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
         }
         receipts.push(response.receipt); retries += response.retries; done++;
       }
-      const rows = store(asset, plan, seen, receipts, duplicates);
-      log(`${label}: ${rows} rows from ${receipts.length} requests${retries ? `, ${retries} retries` : ''}${note[label] ?? ''}; ` +
+      const entry = store(asset, plan, seen, receipts, duplicates, empty);
+      log(`${label}: ${entry.rows} rows from ${receipts.length} requests${retries ? `, ${retries} retries` : ''}` +
+        `${empty ? `, ${empty} empty ${empty === 1 ? 'response' : 'responses'}` : ''}${note[label] ?? ''}; ` +
         `${done}/${total} requests done, ETA ${duration((performance.now() - began) / done * (total - done))}`);
+      // Either that minute has no candle at the exchange, or the exchange read the request's `end` as exclusive
+      // (then no request shares a row with the next one, and every month ends like this). The month is stored as
+      // returned and stays complete; this line and the manifest's lastBucketPresent are how it is noticed.
+      if (!entry.lastBucketPresent)
+        log(`warning: ${label}: no candle came back for the last wanted minute, the bucket starting ${iso(plan.to - MINUTE)}. ` +
+          `It is stored as missing; nothing is filled in. Rows returned twice where requests overlap this month: ${duplicates} ` +
+          '(0 in every month would mean the exchange leaves out the last bucket of each request).');
     }
   }
 
   await Promise.all(assets.map(asset => stream(asset).catch(error => { if (error !== STOPPED) stop.error ??= error; })));
   if (stop.error) throw stop.error;
+  // Per asset over the months of [from, to), fetched now or kept from an earlier run: rows, the months that had
+  // empty answers with how many, and the months whose last wanted bucket did not come back.
   return {format: FORMAT, dir, source: base.source, from, to, bounds: manifestBounds(), requests: done,
     elapsedMs: Math.round(performance.now() - began),
-    assets: Object.fromEntries(assets.map(asset => [asset, {months: months.length, fetched: todo[asset].length,
-      skipped: months.length - todo[asset].length, requests: requests[asset],
-      rows: months.reduce((sum, plan) => sum + manifest.assets[asset].months[plan.month].rows, 0)}]))};
+    assets: Object.fromEntries(assets.map(asset => {
+      const entries = months.map(plan => manifest.assets[asset].months[plan.month]);
+      return [asset, {months: months.length, fetched: todo[asset].length, skipped: months.length - todo[asset].length,
+        requests: requests[asset], rows: entries.reduce((sum, entry) => sum + entry.rows, 0),
+        emptyResponses: Object.fromEntries(months.map((plan, i) => [plan.month, entries[i].emptyResponses ?? 0]).filter(([, count]) => count > 0)),
+        lastBucketMissing: months.filter((plan, i) => entries[i].lastBucketPresent === false).map(plan => plan.month)}];
+    }))};
 }
 
 // ---- command line: no base URL flag and no bounds flag exist, on purpose
@@ -262,8 +319,14 @@ async function main(argv, env) {
     if (!/^\d+(\.\d+)?$/.test(values['pause-ms'])) throw new Error('--pause-ms must be a number of milliseconds');
     options.pauseMs = Number(values['pause-ms']);
   }
-  if ((env.HTTPS_PROXY || env.https_proxy) && env.NODE_USE_ENV_PROXY !== '1')
-    console.error('hint: HTTPS_PROXY is set but NODE_USE_ENV_PROXY is not 1; Node\'s built-in fetch ignores the proxy unless NODE_USE_ENV_PROXY=1');
+  // Two things Node's built-in fetch needs behind a proxy, neither of which it reports clearly when missing.
+  if (env.HTTPS_PROXY || env.https_proxy) {
+    if (env.NODE_USE_ENV_PROXY !== '1')
+      console.error('hint: HTTPS_PROXY is set but NODE_USE_ENV_PROXY is not 1; Node\'s built-in fetch ignores the proxy unless NODE_USE_ENV_PROXY=1');
+    if (!env.NODE_EXTRA_CA_CERTS)
+      console.error('hint: HTTPS_PROXY is set but NODE_EXTRA_CA_CERTS is not; a proxy that re-signs TLS needs its CA bundle there ' +
+        '(NODE_EXTRA_CA_CERTS=/path/to/ca-bundle.pem), or every request fails as a network error naming a certificate');
+  }
   return fetchCandles(options);
 }
 
