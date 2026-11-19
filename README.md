@@ -71,6 +71,10 @@ scripts/run-local.sh
 
 Then open `http://127.0.0.1:8000/` (set `PORT` for another port). The first run installs the backend into `.venv` and the web build tools into `web/node_modules`; later runs start in seconds. Saved runs persist in `.paper-trail-data/`. Stop with Ctrl+C. See [docs/BACKEND_MIGRATION.md](docs/BACKEND_MIGRATION.md) for architecture, the API and what remains.
 
+## Research: can any setting make money after costs? (not yet run)
+
+`research/` holds a protocol fixed in advance and the tools to search 13,200 settings of this rule on 2020 to 2025 Coinbase minute data: settings are chosen on one part of the data and checked once on another, and the range reserved for a held-out test is never fetched. It has been built and checked on synthetic data only and **has not been run**, so there is no result. See [research/README.md](research/README.md).
+
 ## Local development
 
 The original app needs no build or package installation:
