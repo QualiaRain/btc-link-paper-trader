@@ -38,18 +38,25 @@
 // The public exchange is never asked again sooner than 200 ms, between requests or between attempts of one request,
 // and one request is attempted at most 10 times. A loopback test server is exempt from the 200 ms floor and from
 // the 10-attempt ceiling, not from the 5 minute maximum.
+//
+// THE DEFAULT STORE. The store's label follows the base URL, not what answered: a stub passed as `fetchImpl` on the
+// default base would be written down as exchange data. So a call that supplies its own fetch must name a directory
+// of its own, and never the default store; it is refused otherwise, before any request. The command line passes no
+// fetchImpl. (A stub's answers also carry no HTTP date unless it adds one, and storeCompleteness reports an
+// exchange-labelled month whose receipts have none.)
 import {mkdirSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
-import {dirname} from 'node:path';
+import {dirname, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
-import {ASSETS, DEFAULT_DIR, EXPLORATION_FROM, FORMAT, MINUTE, RESERVED_FROM, ROW_BYTES, SOURCE, assertBucketAllowed,
-  manifestBounds, manifestPath, monthKey, monthPaths, monthRange, readManifest, readMonth, sha256Hex} from './dataset.mjs';
+import {ASSETS, CHUNK, DEFAULT_DIR, EXCHANGE_ORIGIN, EXPLORATION_FROM, FORMAT, LOOPBACK_SOURCE, MINUTE, RESERVED_FROM, ROW_BYTES,
+  SOURCE, assertBucketAllowed, manifestBounds, manifestPath, monthKey, monthPaths, monthRange, readManifest, readMonth,
+  sha256Hex} from './dataset.mjs';
 
-export {SOURCE};                            // defined in dataset.mjs, where storeCompleteness compares it
-export const COINBASE_URL = 'https://api.exchange.coinbase.com';
-export const LOOPBACK_SOURCE = 'Loopback test server: synthetic candles, not market data';
+// Defined in dataset.mjs, where storeCompleteness holds a store's label and receipts against them: the two source
+// labels, the exchange's origin, and CHUNK, the step between requests (replay.js: `t+=299*MINUTE`).
+export {SOURCE, LOOPBACK_SOURCE};
+export const COINBASE_URL = EXCHANGE_ORIGIN;
 export const MAX_WAIT_MS = 5 * MINUTE;      // the longest single wait, whatever asked for it
-const CHUNK = 299 * MINUTE;                 // replay.js: `t+=299*MINUTE`
 const MIN_PUBLIC_WAIT_MS = 200;             // public host: shortest pause between requests and shortest retry backoff
 const MAX_PUBLIC_ATTEMPTS = 10;             // public host: most attempts for one request
 const STOPPED = Symbol('another stream failed');
@@ -129,10 +136,12 @@ const duration = ms => {
 // Fetch [from, to) (UTC dates naming bucket starts; from inclusive, to exclusive) into `dir`, month by month per
 // asset. Complete months whose stored range covers the wanted one and whose two files still match the manifest are
 // skipped without a request; everything else is fetched again and replaced. Resolves to a summary; rejects on the
-// first failure, leaving every month completed so far in place.
+// first failure, leaving every month completed so far in place. `fetchImpl` defaults to Node's fetch; a call that
+// supplies one must name a dir other than the default store (see THE DEFAULT STORE above).
 export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', assets = ASSETS, dir = DEFAULT_DIR,
   baseUrl = COINBASE_URL, pauseMs = 250, maxAttempts = 6, backoffMs = 500, timeoutMs = 15000,
-  fetchImpl = globalThis.fetch, log = console.error} = {}) {
+  fetchImpl: suppliedFetch, log = console.error} = {}) {
+  const fetchImpl = suppliedFetch === undefined ? globalThis.fetch : suppliedFetch;
   // ---- the hard guard and every other refusal, before any request exists
   const fromMs = day(from, 'from'), toMs = day(to, 'to');
   if (fromMs < EXPLORATION_FROM) throw new Error(`from ${from} is before the exploration range, which starts at ${iso(EXPLORATION_FROM)}; refused, there is no override`);
@@ -142,6 +151,9 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
   if (!Array.isArray(assets) || !assets.length || new Set(assets).size !== assets.length || !assets.every(a => ASSETS.includes(a)))
     throw new Error(`assets must be a non-empty list without repeats from ${ASSETS.join(', ')}`);
   if (typeof dir !== 'string' || !dir) throw new Error('dir must be a path');
+  if (suppliedFetch !== undefined && resolve(dir) === resolve(DEFAULT_DIR))
+    throw new Error(`a caller-supplied fetchImpl must come with a dir of its own, other than the default store ${DEFAULT_DIR}: ` +
+      'what a stub answers is never written there; refused');
   // Waits: each a finite number inside [0, MAX_WAIT_MS] (see LIMITS above), with a floor for the public host.
   const within = (value, least) => typeof value === 'number' && Number.isFinite(value) && value >= least && value <= MAX_WAIT_MS;
   if (!within(pauseMs, 0)) throw new Error(`pauseMs must be a number from 0 to ${MAX_WAIT_MS} (5 minutes)`);
@@ -319,13 +331,18 @@ async function main(argv, env) {
     if (!/^\d+(\.\d+)?$/.test(values['pause-ms'])) throw new Error('--pause-ms must be a number of milliseconds');
     options.pauseMs = Number(values['pause-ms']);
   }
-  // Two things Node's built-in fetch needs behind a proxy, neither of which it reports clearly when missing.
+  // Two things Node's built-in fetch needs behind a proxy, neither of which it reports clearly when missing. A hint
+  // is left out when one of Node's own options, on its command line or in NODE_OPTIONS, already supplies the thing,
+  // and each is worded to stay true when it is supplied in a way this cannot see.
   if (env.HTTPS_PROXY || env.https_proxy) {
-    if (env.NODE_USE_ENV_PROXY !== '1')
-      console.error('hint: HTTPS_PROXY is set but NODE_USE_ENV_PROXY is not 1; Node\'s built-in fetch ignores the proxy unless NODE_USE_ENV_PROXY=1');
-    if (!env.NODE_EXTRA_CA_CERTS)
+    const nodeOptions = [...process.execArgv, ...(env.NODE_OPTIONS ?? '').split(/\s+/)];
+    if (env.NODE_USE_ENV_PROXY !== '1' && !nodeOptions.includes('--use-env-proxy'))
+      console.error('hint: HTTPS_PROXY is set but NODE_USE_ENV_PROXY is not 1; Node\'s built-in fetch ignores the proxy unless ' +
+        'NODE_USE_ENV_PROXY=1 or --use-env-proxy');
+    if (!env.NODE_EXTRA_CA_CERTS && !nodeOptions.includes('--use-openssl-ca') && !nodeOptions.includes('--use-system-ca'))
       console.error('hint: HTTPS_PROXY is set but NODE_EXTRA_CA_CERTS is not; a proxy that re-signs TLS needs its CA bundle there ' +
-        '(NODE_EXTRA_CA_CERTS=/path/to/ca-bundle.pem), or every request fails as a network error naming a certificate');
+        '(NODE_EXTRA_CA_CERTS=/path/to/ca-bundle.pem), or every request fails as a network error naming a certificate, ' +
+        'unless the CA is supplied another way, for example --use-openssl-ca');
   }
   return fetchCandles(options);
 }

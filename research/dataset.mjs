@@ -32,17 +32,29 @@
 //   An entry without receipts and receiptsSha256 (a store written by hand in a test) still loads: there is no
 //   binding to check. storeCompleteness reports such a month, so the study does not take it for a fetched one.
 //   To fetch one month again, delete its .f64 file: the fetcher's next run refetches exactly that month.
+//   The loader (readMonth, loadSeries) checks a receipts file by hash and line count only. What the receipts say
+//   is read by storeCompleteness, once, before the study runs.
 import {createHash} from 'node:crypto';
-import {existsSync, readFileSync} from 'node:fs';
-import {join} from 'node:path';
+import {existsSync, readFileSync, readdirSync} from 'node:fs';
+import {join, relative, sep} from 'node:path';
 
 export const MINUTE = 60000;
 export const ASSETS = ['BTC', 'LINK'];
 
-// The label a manifest carries when its candles came from the exchange (PROTOCOL.md "Source: Coinbase Exchange
-// public completed one-minute candles"). The fetcher writes it for the exchange host only, and storeCompleteness
-// compares a manifest's source with it.
+// The exchange's origin and the two labels a manifest's `source` can carry from the fetcher: SOURCE when its
+// candles came from that origin (PROTOCOL.md "Source: Coinbase Exchange public completed one-minute candles"),
+// LOOPBACK_SOURCE when they came from a loopback test server. The fetcher writes each label for its own kind of
+// origin only; storeCompleteness compares a manifest's source with SOURCE and holds every bound receipt to the
+// origin the label names.
+export const EXCHANGE_ORIGIN = 'https://api.exchange.coinbase.com';
 export const SOURCE = 'Coinbase Exchange public completed one-minute candles (https://api.exchange.coinbase.com)';
+export const LOOPBACK_SOURCE = 'Loopback test server: synthetic candles, not market data';
+
+// The step between the requests of one fetch (replay.js: `t+=299*MINUTE`). A request asks for the bucket starts t
+// through t + CHUNK, at most 300, so consecutive requests share one bucket and a fetch of the bucket starts
+// [from, to) makes ceil((to - from) / CHUNK) requests. Stated once, here: the fetcher plans its requests with it
+// and storeCompleteness counts a month's receipts against the same plan.
+export const CHUNK = 299 * MINUTE;
 
 // The data boundary. These bound candle BUCKET STARTS: a bucket is allowed iff
 // EXPLORATION_FROM <= bucketStartMs < RESERVED_FROM. They are constants of the pre-registered protocol; no option,
@@ -98,7 +110,8 @@ function assertAsset(asset) {
 }
 
 // Receipts in a .jsonl file: its non-empty lines (the fetcher writes one JSON line per stored response).
-const receiptLines = bytes => bytes.toString('utf8').split('\n').filter(line => line.length).length;
+const receiptTexts = bytes => bytes.toString('utf8').split('\n').filter(line => line.length);
+const receiptLines = bytes => receiptTexts(bytes).length;
 
 function requireManifest(dir) {
   const manifest = readManifest(dir);
@@ -252,33 +265,173 @@ export function coverage(market, startClose, endClose) {
   return {expected, observed, shared, sharedFraction: shared / expected};
 }
 
-// PROTOCOL.md "The study runs only on a complete store: every month from 2020-01 to 2025-09 present and complete
-// for both assets, fetched from the exchange." Returns {complete, source, sourceIsExchange, problems}:
-//   complete          every month of explorationMonths() has, for both assets, a manifest entry that is marked
-//                     complete, whose stored [from, to) covers the whole month clipped to the exploration bounds (so
-//                     2025-09 runs through the bucket starting 2025-09-29T23:59Z), and whose files verify against it
-//                     (readMonth, with a receipts file bound: a month no receipt vouches for was not fetched).
-//   source            the manifest's source text; sourceIsExchange is true only when it is exactly SOURCE.
-//   problems          [{asset, month, problem}], one per failing month, assets in ASSETS order, months in time order.
-// `complete` says nothing about the source: a caller needs both. A missing or unreadable manifest throws, as it
-// does in loadSeries. Every month file is read once, so this costs about as much as loading both series.
-export function storeCompleteness(dir = DEFAULT_DIR) {
-  const manifest = requireManifest(dir), problems = [];
-  for (const asset of ASSETS) for (const month of explorationMonths()) {
-    const entry = manifest.assets[asset]?.months[month], [start, end] = monthRange(month);
-    const from = Math.max(start, EXPLORATION_FROM), to = Math.min(end, RESERVED_FROM);
-    let problem = null;
-    if (!entry) problem = 'missing: the manifest has no entry for this month';
-    else if (entry.complete !== true) problem = 'not marked complete';
-    else if (!(Date.parse(entry.from) <= from && Date.parse(entry.to) >= to))
-      problem = `stored for ${typeof entry.from === 'string' && typeof entry.to === 'string' ? `${entry.from} to ${entry.to}` : 'an unrecorded range'}` +
-        `, which does not cover the whole month ${iso(from)} to ${iso(to)}`;
-    else if (typeof entry.receiptsSha256 !== 'string') problem = 'no receipts file is bound to this month (the entry has no receiptsSha256)';
-    else try { readMonth(dir, asset, month, entry); }
-    catch (error) { problem = `does not verify against the manifest: ${error.message.replace(`${asset} ${month}: `, '')}`; }
-    if (problem) problems.push({asset, month, problem});
+// A receipt as the fetcher writes it, a JSON object {url, receivedAt, httpDate, sha256, rowCount, attempts}: url a
+// text, receivedAt a whole number of milliseconds, httpDate a text or absent, sha256 64 lower-case hex digits,
+// rowCount a whole number from 0, attempts a whole number from 1.
+const isReceipt = value => value !== null && typeof value === 'object' && typeof value.url === 'string' &&
+  Number.isSafeInteger(value.receivedAt) && (value.httpDate == null || typeof value.httpDate === 'string') &&
+  typeof value.sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.sha256) && Number.isSafeInteger(value.rowCount) && value.rowCount >= 0 &&
+  Number.isSafeInteger(value.attempts) && value.attempts >= 1;
+
+// A bucket start as a request URL carries it: the ISO text of a whole UTC minute. NaN for anything else.
+function minuteOf(text) {
+  const t = Date.parse(text);
+  return Number.isSafeInteger(t) && t % MINUTE === 0 && iso(t) === text ? t : NaN;
+}
+
+// The request a receipt's URL names, {origin, loopback, start, end}, start and end being the first and the last
+// bucket start asked for. Null unless the URL is a one-minute candle request for this asset as the fetcher builds
+// them, <origin>/products/<ASSET>-USD/candles?granularity=60&start=<ISO>&end=<ISO>: an http or https URL with that
+// path, granularity 60, and start and end as ISO texts of whole minutes. Nothing else in the URL is looked at.
+// `loopback` is the fetcher's own rule for a test server (its resolveBase): http on 127.0.0.1 or localhost.
+function receiptRequest(url, asset) {
+  let parsed;
+  try { parsed = new URL(url); } catch { return null; }
+  const start = minuteOf(parsed.searchParams.get('start')), end = minuteOf(parsed.searchParams.get('end'));
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== `/products/${asset}-USD/candles` ||
+      parsed.searchParams.get('granularity') !== '60' || Number.isNaN(start) || Number.isNaN(end)) return null;
+  return {origin: parsed.origin, loopback: parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname), start, end};
+}
+
+// PROTOCOL.md, Data boundary: '"Fetched from the exchange" is read from the store's own records (its source label
+// and the request receipts bound to each month); that catches accidents and cannot prove where a file came from.'
+// What one month's bound receipts say, held against the store's label and the month's manifest entry: the first
+// disagreement as text, or null. Receipt by receipt, in file order:
+//   1. the line is a JSON receipt;
+//   2. its URL is a one-minute candle request for this asset (receiptRequest);
+//   3. its origin is the exchange's when the store is labelled SOURCE, and a loopback one when the store is
+//      labelled LOOPBACK_SOURCE (any other label names no origin, so none is asked for);
+//   4. the buckets it asks for lie inside the entry's [from, to);
+//   5. in a store labelled SOURCE it carries an HTTP date (a text Date.parse reads);
+// then over the whole file:
+//   6. there are as many receipts as a fetch of [from, to) makes requests, ceil((to - from) / CHUNK);
+//   7. their requests leave no bucket of [from, to) unasked;
+//   8. their row counts add up to at least the stored rows plus the rows returned twice (not exactly: a body can
+//      also hold rows the fetcher ignored, and a receipt counts those too).
+// This raises the cost of an accident or of a hand edit: relabelling a store, widening an entry's range, swapping
+// two months or re-hashing a changed file now also takes rewriting receipts files. It proves nothing about
+// provenance. Whoever writes the files can write receipts that pass, and rows removed from a month are not noticed.
+function receiptsProblem(bytes, source, asset, entry) {
+  const from = Date.parse(entry.from), to = Date.parse(entry.to), requests = [];
+  let counted = 0;
+  for (const [i, line] of receiptTexts(bytes).entries()) {
+    let receipt = null;
+    try { receipt = JSON.parse(line); } catch {}
+    if (!isReceipt(receipt)) return `line ${i + 1} of the receipts file is not a JSON receipt`;
+    const request = receiptRequest(receipt.url, asset);
+    if (!request) return `receipt ${i + 1} does not name a one-minute candle request for ${asset}-USD`;
+    if (source === SOURCE && request.origin !== EXCHANGE_ORIGIN)
+      return `receipt ${i + 1} names ${request.origin}, and this store is labelled as fetched from ${EXCHANGE_ORIGIN}`;
+    if (source === LOOPBACK_SOURCE && !request.loopback)
+      return `receipt ${i + 1} names ${request.origin}, and this store is labelled as fetched from a loopback test server`;
+    if (!(request.start >= from && request.start <= request.end && request.end < to))
+      return `receipt ${i + 1} asks for the buckets ${iso(request.start)} to ${iso(request.end)}, which are not all inside the stored range ${iso(from)} to ${iso(to)}`;
+    if (source === SOURCE && !Number.isFinite(Date.parse(receipt.httpDate ?? '')))
+      return `receipt ${i + 1} carries no HTTP date, and this store is labelled as fetched from the exchange`;
+    requests.push(request); counted += receipt.rowCount;
   }
-  return {complete: problems.length === 0, source: manifest.source, sourceIsExchange: manifest.source === SOURCE, problems};
+  const needed = Math.ceil((to - from) / CHUNK);
+  if (requests.length !== needed)
+    return `holds ${requests.length} receipts, and a fetch of the stored range ${iso(from)} to ${iso(to)} makes ${needed} requests`;
+  let next = from;                          // the first bucket start no request has asked for yet
+  for (const request of requests.toSorted((a, b) => a.start - b.start)) {
+    if (request.start > next) break;
+    next = Math.max(next, request.end + MINUTE);
+  }
+  if (next < to) return `the receipts' requests do not cover the stored range: none asks for the bucket starting ${iso(next)}`;
+  const twice = Number.isSafeInteger(entry.duplicateRows) && entry.duplicateRows > 0 ? entry.duplicateRows : 0;
+  if (counted < entry.rows + twice) return `the receipts count ${counted} rows, fewer than the ${entry.rows} stored rows plus ${twice} returned twice`;
+  return null;
+}
+
+// The first way one month of the exploration range falls short of "present and complete ... fetched from the
+// exchange", as text, or null. `entry` is the month's manifest entry, if any.
+function monthProblem(dir, source, asset, month, entry) {
+  const [start, end] = monthRange(month), from = Math.max(start, EXPLORATION_FROM), to = Math.min(end, RESERVED_FROM);
+  if (!entry) return 'missing: the manifest has no entry for this month';
+  if (entry.complete !== true) return 'not marked complete';
+  if (!(Date.parse(entry.from) <= from && Date.parse(entry.to) >= to))
+    return `stored for ${typeof entry.from === 'string' && typeof entry.to === 'string' ? `${entry.from} to ${entry.to}` : 'an unrecorded range'}` +
+      `, which does not cover the whole month ${iso(from)} to ${iso(to)}`;
+  if (typeof entry.receiptsSha256 !== 'string') return 'no receipts file is bound to this month (the entry has no receiptsSha256)';
+  try { readMonth(dir, asset, month, entry); }
+  catch (error) { return `does not verify against the manifest: ${error.message.replace(`${asset} ${month}: `, '')}`; }
+  // PROTOCOL.md, Data boundary: "A month that holds no row for an asset is not complete."
+  if (entry.rows === 0) return 'holds no row';
+  return receiptsProblem(readFileSync(monthPaths(dir, asset, month).receipts), source, asset, entry);
+}
+
+// Every file under a directory, at any depth, in name order (a directory that cannot be listed holds none).
+function filesUnder(dir) {
+  let entries;
+  try { entries = readdirSync(dir, {withFileTypes: true}); } catch { return []; }
+  return entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .flatMap(entry => (entry.isDirectory() ? filesUnder(join(dir, entry.name)) : [join(dir, entry.name)]));
+}
+
+// PROTOCOL.md, Data boundary: "The study runs only on a complete store: every month from 2020-01 to 2025-09 present
+// and complete for both assets, fetched from the exchange. A month that holds no row for an asset is not complete.
+// 'Fetched from the exchange' is read from the store's own records (its source label and the request receipts bound
+// to each month); that catches accidents and cannot prove where a file came from."
+// Returns {complete, source, sourceIsExchange, usable, problems, emptyResponseMonths, lastBucketMissingMonths,
+// rowsByMonth}:
+//   complete          no problem was found (below). The label itself is not judged by it: a store fetched from a
+//                     loopback test server can be complete. Receipts that contradict the label are a problem.
+//   source            the manifest's source text; sourceIsExchange is true only when it is exactly SOURCE.
+//   usable            complete && sourceIsExchange: the protocol's condition in one field, so that a caller cannot
+//                     read half of it.
+//   problems          [{asset, month, problem}], in this order:
+//                     a. per asset (ASSETS order) and month of explorationMonths() (time order), at most one: the
+//                        first of: no manifest entry; not marked complete; a stored [from, to) that does not cover
+//                        the whole month clipped to the exploration bounds (so 2025-09 runs through the bucket
+//                        starting 2025-09-29T23:59Z); no receipts file bound; files that do not verify against the
+//                        entry (readMonth); no row; receipts that disagree with the label or the entry
+//                        (receiptsProblem, which also says what that check is worth);
+//                     b. per asset and month key the manifest lists outside the exploration range, one. The loader
+//                        refuses such a month's rows, so a store that lists one is not the protocol's store;
+//                     c. per candle or receipts file in the directory that no manifest entry names, one: any file
+//                        under candles/ or receipts/, and any .f64 or .jsonl file elsewhere under the directory.
+//                        `asset` and `month` are then the names the file has in those places: its directory and
+//                        its file name up to the first dot (BTC and 2025-10 for candles/BTC/2025-10.f64). The
+//                        problem text gives the path. A month that has files and no entry is reported under a
+//                        (missing) and once more here for each file.
+//   emptyResponseMonths      [{asset, month, emptyResponses}]: the complete entries of the exploration range that
+//                     record at least one HTTP 200 answer without a row. Such a month can still be complete.
+//   lastBucketMissingMonths  [{asset, month}]: those that record that no row came back for the last wanted bucket.
+//   rowsByMonth       {BTC: {"YYYY-MM": rows}, LINK: {...}}: every month of the exploration range in time order,
+//                     with the row count of its entry when the manifest marks it complete (the months loadSeries
+//                     reads) and 0 otherwise.
+// The last three restate what the manifest records, so that a record of the study can state them. A missing or
+// unreadable manifest throws, as it does in loadSeries. Every month file is read once or twice and every receipt is
+// parsed; loadSeries does none of the parsing and stays as cheap as it was.
+export function storeCompleteness(dir = DEFAULT_DIR) {
+  const manifest = requireManifest(dir), source = manifest.source, months = explorationMonths();
+  const problems = [], emptyResponseMonths = [], lastBucketMissingMonths = [], rowsByMonth = {};
+  for (const asset of ASSETS) {
+    rowsByMonth[asset] = {};
+    for (const month of months) {
+      const entry = manifest.assets[asset]?.months[month], problem = monthProblem(dir, source, asset, month, entry);
+      if (problem) problems.push({asset, month, problem});
+      const stored = entry?.complete === true ? entry : {};
+      rowsByMonth[asset][month] = Number.isSafeInteger(stored.rows) && stored.rows > 0 ? stored.rows : 0;
+      if (Number.isSafeInteger(stored.emptyResponses) && stored.emptyResponses > 0)
+        emptyResponseMonths.push({asset, month, emptyResponses: stored.emptyResponses});
+      if (stored.lastBucketPresent === false) lastBucketMissingMonths.push({asset, month});
+    }
+  }
+  for (const asset of ASSETS) for (const month of Object.keys(manifest.assets[asset]?.months ?? {}).sort())
+    if (!months.includes(month)) problems.push({asset, month, problem: 'outside the exploration range: the manifest lists this month'});
+  const named = new Set(Object.entries(manifest.assets).flatMap(([asset, block]) =>
+    Object.keys(block.months).flatMap(month => Object.values(monthPaths(dir, asset, month)))));
+  for (const file of filesUnder(dir)) {
+    const parts = relative(dir, file).split(sep), inTree = parts.length > 1 && ['candles', 'receipts'].includes(parts[0]);
+    if ((inTree || /\.(f64|jsonl)$/.test(parts.at(-1))) && !named.has(file))
+      problems.push({asset: parts.at(-2) ?? '', month: parts.at(-1).split('.')[0],
+        problem: `not in the manifest: ${parts.join('/')} is in the store directory and no manifest entry names it`});
+  }
+  const complete = problems.length === 0, sourceIsExchange = source === SOURCE;
+  return {complete, source, sourceIsExchange, usable: complete && sourceIsExchange, problems, emptyResponseMonths,
+    lastBucketMissingMonths, rowsByMonth};
 }
 
 // What the receipts files on disk are, per asset, for the manifest's complete months: {files, receipts, sha256}

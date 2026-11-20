@@ -32,13 +32,15 @@
 // in by the caller: research/holdthrough-oracle.mjs loadHoldThroughEngine(), "the same engine with only its
 // scheduled-decision branch replaced" (PROTOCOL.md, Simulation). The frames are the same whichever engine runs.
 import {fileURLToPath} from 'node:url';
+import * as UNMODIFIED from '../engine.js';
 import {MINUTE, ASSETS, lowerBound} from './windows.mjs';
 
-// The reference engine and the file it was loaded from, kept as one URL so that the path a caller hashes is the
-// module that ran.
+// The reference engine and the file it is loaded from: the path a caller hashes is the module that ran. The
+// engine is imported statically, so this module has no top-level await (Node 22 aborts the whole process when a
+// worker thread is terminated while a module with one is being evaluated in it). The specifier is therefore
+// written twice, above and here; research/study.test.mjs checks that the two are the same file.
 const ENGINE_URL = new URL('../engine.js', import.meta.url);
 export const ENGINE_FILE = fileURLToPath(ENGINE_URL);
-const UNMODIFIED = await import(ENGINE_URL.href);
 
 const FIXED = ['maxQuoteAgeMs', 'maxOutcomeLatenessMs', 'maxDrawdownBps', 'dailyLossBps', 'cashYieldBps'];
 const RECIPROCAL = 1;   // K in price -> K/price

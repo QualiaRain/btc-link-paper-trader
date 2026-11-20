@@ -11,11 +11,12 @@ import path from 'node:path';
 import fs from 'node:fs';
 import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import {fetchHistoricalRange} from '../replay.js';
 import {COINBASE_URL, LOOPBACK_SOURCE, MAX_WAIT_MS, SOURCE, fetchCandles, retryDelayMs} from './fetch-candles.mjs';
-import {ASSETS, EXPLORATION_FROM, MINUTE, RESERVED_FROM, SOURCE as DATASET_SOURCE, coverage, explorationMonths, loadSeries,
-  publicManifest, receiptsSummary, seriesFromRows, storeCompleteness} from './dataset.mjs';
+import {ASSETS, CHUNK, EXCHANGE_ORIGIN, EXPLORATION_FROM, LOOPBACK_SOURCE as DATASET_LOOPBACK_SOURCE, MINUTE, RESERVED_FROM,
+  SOURCE as DATASET_SOURCE, coverage, explorationMonths, loadSeries, publicManifest, receiptsSummary, seriesFromRows,
+  storeCompleteness} from './dataset.mjs';
 
 const CLI = fileURLToPath(new URL('./fetch-candles.mjs', import.meta.url));
 const SAMPLE = fileURLToPath(new URL('../data/sample.json', import.meta.url));
@@ -154,6 +155,51 @@ function writeStore(dir, asset, month, rows, overrides = {}, bounds = {from: iso
 }
 const handRow = (bucketStart, close = 100) => [bucketStart + MINUTE, close - 1, close + 1, close, close, 2];
 const editManifest = (dir, change) => { const manifest = readManifestFile(dir); change(manifest); fs.writeFileSync(manifestFile(dir), JSON.stringify(manifest)); };
+
+// ---- receipts written by hand, in the shape the fetcher gives them
+const HTTP_DATE = 'Mon, 29 Sep 2025 00:00:00 GMT';
+// The URL of one request, as the fetcher builds it (the mirror test below holds that text against replay.js).
+const requestUrl = (origin, asset, start, end) => `${origin}/products/${asset}-USD/candles?` + new URLSearchParams({granularity: '60', start: iso(start), end: iso(end)});
+// The receipts a fetch of the bucket starts [from, to) would bind to these stored rows: one per request, in request
+// order, each counting the rows whose bucket it asked for. A bucket two requests share is counted by both, as the
+// exchange returns it twice.
+function receiptsFor(asset, from, to, rows, {origin = COINBASE_URL, httpDate = HTTP_DATE} = {}) {
+  return chunksOf(from, to).map(([start, end]) => ({url: requestUrl(origin, asset, start, end), receivedAt: 0, httpDate,
+    sha256: sha(`${asset} ${iso(start)}`), rowCount: rows.filter(row => row[0] - MINUTE >= start && row[0] - MINUTE <= end).length, attempts: 1}));
+}
+// Receipts as the text of a .jsonl file; a string stands for a line that is taken as it is.
+const receiptsText = receipts => receipts.map(receipt => (typeof receipt === 'string' ? receipt : JSON.stringify(receipt)) + '\n').join('');
+// A hand edit that covers its tracks: a month's receipts file is replaced and its manifest entry bound to the new
+// file by SHA-256 and line count, so the loader has nothing to object to.
+function rebindReceipts(dir, asset, month, text) {
+  const lines = text.split('\n').filter(line => line.length).length;
+  fs.writeFileSync(receiptsFile(dir, asset, month), text);
+  editManifest(dir, manifest => Object.assign(manifest.assets[asset].months[month], {requests: lines, receipts: lines, receiptsSha256: sha(text)}));
+}
+
+const monthBounds = month => { const [year, number] = month.split('-').map(Number); return [Date.UTC(year, number - 1, 1), Date.UTC(year, number, 1)]; };
+// The part of a month inside the exploration bounds: all of it, except that 2025-09 stops at 2025-09-30T00:00Z.
+const wholeMonth = month => { const [start, end] = monthBounds(month); return [Math.max(start, EXPLORATION_FROM), Math.min(end, RESERVED_FROM)]; };
+// The rows of a month in the stores written by hand below: the first bucket of every request of its fetch, and its
+// last bucket. So no answer is empty, the last wanted bucket is there, and each bucket two requests share came back
+// twice: requests + 1 rows, requests - 1 of them returned twice.
+const monthRows = month => { const [from, to] = wholeMonth(month); return [...chunksOf(from, to).map(([start]) => handRow(start, 100)), handRow(to - MINUTE, 101)]; };
+// One whole month written by hand as a fetch of it would leave it: rows, one receipt per request, and a manifest
+// entry that says what the receipts say. `receipts` and `overrides` are where a test departs from that.
+function writeWholeMonth(dir, asset, month, {source = SOURCE, origin = COINBASE_URL, rows = monthRows(month), receipts, overrides = {}} = {}) {
+  const [from, to] = wholeMonth(month), bound = receipts ?? receiptsFor(asset, from, to, rows, {origin});
+  writeStore(dir, asset, month, rows, {from: iso(from), to: iso(to), duplicateRows: bound.reduce((sum, receipt) => sum + receipt.rowCount, 0) - rows.length,
+    emptyResponses: bound.filter(receipt => receipt.rowCount === 0).length, lastBucketPresent: rows.at(-1)?.[0] === to, ...overrides}, undefined, bound, source);
+}
+// A whole store written by hand: every month of the exploration range for both assets, labelled `source`, with
+// receipts that name `origin`.
+function writeWholeStore(dir, source = SOURCE, origin = COINBASE_URL) {
+  for (const asset of ASSETS) for (const month of explorationMonths()) writeWholeMonth(dir, asset, month, {source, origin});
+}
+// What storeCompleteness returns for such a store, whatever its label.
+const wholeStoreResult = (source = SOURCE) => ({complete: true, source, sourceIsExchange: source === SOURCE, usable: source === SOURCE, problems: [],
+  emptyResponseMonths: [], lastBucketMissingMonths: [],
+  rowsByMonth: Object.fromEntries(ASSETS.map(asset => [asset, Object.fromEntries(explorationMonths().map(month => [month, monthRows(month).length]))]))});
 
 // A stub exchange for fetchImpl: the synthetic candles of the buckets a request names, newest first as the exchange
 // sends them. `keep(asset, bucketSeconds, request)` can drop rows; nothing is connected to.
@@ -431,6 +477,37 @@ test('pacing with the default options on the public host, under a virtual clock'
     assert.deepEqual(at, {BTC: [0, 250], LINK: [0]});     // LINK's second attempt was due at 500, after BTC failed at 250
     assert.equal(clock.now - zero, 500);
   });
+});
+
+// The run a real fetch makes: every option at its default but the directory, so the public host, 250 ms between the
+// requests of a stream, and a store labelled as the exchange's. A stub answers and the clock is virtual: nothing is
+// contacted and nothing is waited for. What the fetcher leaves must be what storeCompleteness accepts.
+test('the default run, answered by a stub under a virtual clock, leaves a store that is complete and usable', async t => {
+  const clock = virtualClock(t), dir = tmp(t), urls = [];
+  // Each answer holds the request's first and last bucket and carries an HTTP date, as an answer over HTTP does.
+  const rowsOf = url => {
+    const target = new URL(url), [start, end] = ['start', 'end'].map(name => Date.parse(target.searchParams.get(name)) / 1000);
+    return JSON.stringify([...new Set([end, start])].map(bucket => [bucket, 1, 4, 2, 3, 5]));
+  };
+  const result = await clock.settle(fetchCandles({dir, log: quiet, fetchImpl: async url => { urls.push(String(url)); return new Response(rowsOf(url), {headers: {date: HTTP_DATE}}); }}),
+    250, 4 * 3600000);
+  assert.equal(result.error, undefined);
+  assert.deepEqual([result.value.source, result.value.requests, result.value.from, result.value.to], [SOURCE, 20300, '2020-01-01', '2025-09-30']);
+  assert.equal(urls.filter(url => url.startsWith('https://api.exchange.coinbase.com/products/')).length, 20300);
+  // Every month of the range for both assets: whole, with rows, bound to receipts that name the exchange, carry a
+  // date, are as many as the month's requests, cover it and count its rows.
+  const usable = storeCompleteness(dir);
+  assert.deepEqual([usable.complete, usable.sourceIsExchange, usable.usable, usable.problems], [true, true, true, []]);
+  assert.deepEqual(usable, wholeStoreResult());           // the store the tests below write by hand is this one, month for month
+  // The same run, one month of it, answered by a stub that sets no Date header: labelled as the exchange's all the
+  // same, because the label follows the base URL, and reported, because no answer over HTTP comes without a date.
+  const bare = tmp(t);
+  const dateless = await clock.settle(fetchCandles({from: '2025-09-01', assets: ['BTC'], dir: bare, log: quiet, fetchImpl: async url => new Response(rowsOf(url))}), 250);
+  assert.equal(dateless.error, undefined);
+  const reported = storeCompleteness(bare);
+  assert.deepEqual([reported.source, reported.sourceIsExchange, reported.usable, reported.problems.filter(problem => problem.month === '2025-09')],
+    [SOURCE, true, false, [{asset: 'BTC', month: '2025-09', problem: 'receipt 1 carries no HTTP date, and this store is labelled as fetched from the exchange'},
+      {asset: 'LINK', month: '2025-09', problem: 'missing: the manifest has no entry for this month'}]]);
 });
 
 test('a range ending at the reserved boundary: requests, stored rows, receipts, manifest, resume, loader and coverage', async t => {
@@ -727,6 +804,9 @@ test('an interrupted replacement never leaves receipts of another fetch than the
     receiptLines: readReceipts(dir, 'BTC', '2025-09').length, storedRows: readRows(candleFile(dir, 'BTC', '2025-09')).length});
   const contents = dir => Object.fromEntries(filesIn(dir).map(file => [file, sha(fs.readFileSync(path.join(dir, file)))]));
   const block = file => { fs.mkdirSync(`${file}.tmp`); return () => fs.rmdirSync(`${file}.tmp`); };
+  // The failure the run must report is the blocked write's own: the open of that file's temporary path, refused
+  // because a directory is there. Not the error of the cleanup that follows it (removing a directory fails too).
+  const blockedWrite = file => ({name: 'Error', code: 'EISDIR', syscall: 'open', path: `${file}.tmp`});
   const narrow = {manifestRequests: 10, receiptLines: 10, storedRows: narrowRows.length};
   assert.ok(wideRows.length > narrowRows.length);
 
@@ -734,7 +814,7 @@ test('an interrupted replacement never leaves receipts of another fetch than the
     const {dir, run, seen} = await setup(), before = contents(dir);
     assert.deepEqual(state(dir), narrow);
     const unblock = block(candleFile(dir, 'BTC', '2025-09'));
-    await assert.rejects(run(WIDE));
+    await assert.rejects(run(WIDE), blockedWrite(candleFile(dir, 'BTC', '2025-09')));
     unblock();
     assert.deepEqual(contents(dir), before);              // candles, receipts and manifest are all still the narrow fetch
     assert.equal(loadSeries(dir, 'BTC').time.length, narrowRows.length);
@@ -746,7 +826,7 @@ test('an interrupted replacement never leaves receipts of another fetch than the
   await t.test('stopped at the second write (receipts): the new candles disagree with the manifest, so the month is refused and refetched', async () => {
     const {dir, run, seen} = await setup();
     const unblock = block(receiptsFile(dir, 'BTC', '2025-09'));
-    await assert.rejects(run(WIDE));
+    await assert.rejects(run(WIDE), blockedWrite(receiptsFile(dir, 'BTC', '2025-09')));
     unblock();
     assert.deepEqual(state(dir), {manifestRequests: 10, receiptLines: 10, storedRows: wideRows.length});   // the torn state
     assert.throws(() => loadSeries(dir, 'BTC'), /BTC 2025-09: candle file SHA-256 disagrees with the manifest/);
@@ -761,7 +841,7 @@ test('an interrupted replacement never leaves receipts of another fetch than the
   await t.test('stopped at the third write (manifest): the month is refused and refetched', async () => {
     const {dir, run} = await setup();
     const unblock = block(manifestFile(dir));
-    await assert.rejects(run(WIDE));
+    await assert.rejects(run(WIDE), blockedWrite(manifestFile(dir)));
     unblock();
     assert.deepEqual(state(dir), {manifestRequests: 10, receiptLines: 29, storedRows: wideRows.length});
     assert.throws(() => loadSeries(dir, 'BTC'), /BTC 2025-09: candle file SHA-256 disagrees with the manifest/);
@@ -774,7 +854,7 @@ test('an interrupted replacement never leaves receipts of another fetch than the
     const {dir, run, seen} = await setup(stubExchange((asset, bucket) => bucket * 1000 >= utc('2025-09-10') && bucket * 1000 < utc('2025-09-12')));
     const candlesBefore = sha(fs.readFileSync(candleFile(dir, 'BTC', '2025-09')));
     const unblock = block(manifestFile(dir));
-    await assert.rejects(run(WIDE));
+    await assert.rejects(run(WIDE), blockedWrite(manifestFile(dir)));
     unblock();
     assert.equal(sha(fs.readFileSync(candleFile(dir, 'BTC', '2025-09'))), candlesBefore);
     // The candle file still matches the manifest entry, which says 10 requests for 09-10..09-12; the receipts on
@@ -837,6 +917,23 @@ test('an empty answer and a missing month-end bucket are recorded and warned abo
     const refetched = await fetchCandles({...options, fetchImpl: stubExchange()});
     assert.deepEqual(refetched.assets.BTC, {months: 1, fetched: 1, skipped: 0, requests: 5, rows: dayRows.length, emptyResponses: {}, lastBucketMissing: []});
     assert.deepEqual(readRows(candleFile(dir, 'BTC', '2025-09')), dayRows);
+  });
+
+  await t.test('a whole month of empty answers: the fetcher stores and keeps what it was told, and storeCompleteness reports a month that holds no row', async () => {
+    const dir = tmp(t);
+    let calls = 0;
+    const options = {...base, from: '2025-09-01', to: '2025-09-30', dir, log: quiet, fetchImpl: async () => { calls++; return new Response('[]'); }};
+    const summary = await fetchCandles(options);
+    assert.deepEqual([calls, summary.assets.BTC.rows, summary.assets.BTC.emptyResponses], [140, 0, {'2025-09': 140}]);
+    // PROTOCOL.md: "A month that holds no row for an asset is not complete." Its receipts are in order: they name the
+    // loopback origin of a loopback store, cover the month and count the no rows it stores.
+    const result = storeCompleteness(dir);
+    assert.deepEqual(result.problems.filter(problem => problem.month === '2025-09'), [{asset: 'BTC', month: '2025-09', problem: 'holds no row'},
+      {asset: 'LINK', month: '2025-09', problem: 'missing: the manifest has no entry for this month'}]);
+    assert.deepEqual([result.complete, result.usable, result.rowsByMonth.BTC['2025-09'], result.emptyResponseMonths, result.lastBucketMissingMonths],
+      [false, false, 0, [{asset: 'BTC', month: '2025-09', emptyResponses: 140}], [{asset: 'BTC', month: '2025-09'}]]);
+    await fetchCandles(options);
+    assert.equal(calls, 140);                             // not asked for again: deleting the month's candle file is how
   });
 
   await t.test('an exchange that reads `end` as exclusive: every month ends one bucket short, stays complete, and says so', async () => {
@@ -1129,6 +1226,18 @@ test('loadSeries reads only what the manifest vouches for and never a row outsid
     writeStore(dir, 'BTC', '2020-01', rows, {}, {from: '2020-01-01T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z'});
     assert.throws(() => loadSeries(dir, 'BTC'), /written under other bounds/);
     assert.throws(() => publicManifest(dir), /written under other bounds/);
+    // Each bound is compared on its own: a manifest whose `from` alone differs, one whose `to` alone differs, one
+    // with a bound missing and one with no bounds at all are refused by everything that reads a manifest.
+    const refused = /manifest\.json: written under other bounds than \[2020-01-01T00:00:00\.000Z, 2025-09-30T00:00:00\.000Z\); refused$/;
+    for (const bounds of [{from: '2019-01-01T00:00:00.000Z', to: '2025-09-30T00:00:00.000Z'}, {from: '2020-01-01T00:00:00.000Z', to: '2025-10-01T00:00:00.000Z'},
+      {from: '2020-01-01T00:00:00Z', to: '2025-09-30T00:00:00.000Z'}, {to: '2025-09-30T00:00:00.000Z'}, {from: '2020-01-01T00:00:00.000Z'}, {}, null, undefined]) {
+      dir = tmp(t);
+      writeStore(dir, 'BTC', '2020-01', rows);
+      assert.deepEqual([...loadSeries(dir, 'BTC').close], [7000]);              // the same store under the protocol's bounds loads
+      editManifest(dir, manifest => { if (bounds === undefined) delete manifest.bounds; else manifest.bounds = bounds; });
+      for (const read of [() => loadSeries(dir, 'BTC'), () => publicManifest(dir), () => storeCompleteness(dir), () => receiptsSummary(dir)])
+        assert.throws(read, refused, JSON.stringify(bounds));
+    }
     dir = tmp(t);
     writeStore(dir, 'BTC', '2020-01', rows);
     const manifest = readManifestFile(dir);
@@ -1181,60 +1290,86 @@ test('loadSeries reads only what the manifest vouches for and never a row outsid
 });
 
 // PROTOCOL.md: "The study runs only on a complete store: every month from 2020-01 to 2025-09 present and complete for
-// both assets, fetched from the exchange."
-const monthBounds = month => { const [year, number] = month.split('-').map(Number); return [Date.UTC(year, number - 1, 1), Date.UTC(year, number, 1)]; };
-// The part of a month inside the exploration bounds: all of it, except that 2025-09 stops at 2025-09-30T00:00Z.
-const wholeMonth = month => { const [start, end] = monthBounds(month); return [Math.max(start, EXPLORATION_FROM), Math.min(end, RESERVED_FROM)]; };
-// A whole store written by hand in the amended layout: every exploration month for both assets, each with its first
-// and last bucket as rows, one bound receipt, and the range it stands for.
-function writeWholeStore(dir, source = SOURCE) {
-  for (const asset of ASSETS) for (const month of explorationMonths()) {
-    const [from, to] = wholeMonth(month);
-    writeStore(dir, asset, month, [handRow(from, 100), handRow(to - MINUTE, 101)],
-      {from: iso(from), to: iso(to), duplicateRows: 0, emptyResponses: 0, lastBucketPresent: true}, undefined,
-      [{url: `synthetic:${asset}:${month}`, receivedAt: 0, httpDate: null, sha256: sha(`${asset} ${month}`), rowCount: 2, attempts: 1}], source);
-  }
-}
-
-test('storeCompleteness: every month of 2020-01 to 2025-09, whole, for both assets, with files that verify; the source is reported beside it', async t => {
+// both assets, fetched from the exchange. A month that holds no row for an asset is not complete. 'Fetched from the
+// exchange' is read from the store's own records (its source label and the request receipts bound to each month)".
+test('storeCompleteness: every month of 2020-01 to 2025-09, whole, with rows, for both assets, with files that verify; the label is reported beside it', async t => {
   const months = explorationMonths();
   assert.equal(months.length, 69);
   assert.deepEqual([months[0], months[1], months[11], months[12], months[49], months.at(-2), months.at(-1)],
     ['2020-01', '2020-02', '2020-12', '2021-01', '2024-02', '2025-08', '2025-09']);
   assert.deepEqual(months, [...new Set(months)].sort());
-  assert.equal(SOURCE, DATASET_SOURCE);                   // the fetcher re-exports the label dataset.mjs defines
+  assert.equal(SOURCE, DATASET_SOURCE);                   // the fetcher re-exports the labels dataset.mjs defines
   assert.equal(DATASET_SOURCE, 'Coinbase Exchange public completed one-minute candles (https://api.exchange.coinbase.com)');
+  assert.equal(LOOPBACK_SOURCE, DATASET_LOOPBACK_SOURCE);
+  assert.equal(DATASET_LOOPBACK_SOURCE, 'Loopback test server: synthetic candles, not market data');
+  assert.equal(COINBASE_URL, EXCHANGE_ORIGIN);            // the origin the fetcher asks is the one an exchange store's receipts must name
+  assert.equal(EXCHANGE_ORIGIN, 'https://api.exchange.coinbase.com');
+  assert.equal(CHUNK, 299 * MINUTE);                      // the step chunksOf() above takes from replay.js
   assert.throws(() => storeCompleteness(tmp(t)), /no manifest; fetch with research\/fetch-candles\.mjs first/);
 
   const dir = tmp(t);
   writeWholeStore(dir);
-  const whole = {complete: true, source: SOURCE, sourceIsExchange: true, problems: []};
-  await t.test('a whole store is complete, and both series load from it', () => {
+  const whole = wholeStoreResult(), requests = Object.fromEntries(months.map(month => [month, chunksOf(...wholeMonth(month)).length]));
+  const said = result => result.problems.map(problem => `${problem.asset} ${problem.month}: ${problem.problem}`);
+  // The store is put back byte for byte after each damage: changed and deleted files rewritten, added ones removed.
+  const snapshot = () => Object.fromEntries(filesIn(dir).map(file => [file, fs.readFileSync(path.join(dir, file))]));
+  const restore = saved => {
+    for (const file of filesIn(dir)) if (!(file in saved)) fs.rmSync(path.join(dir, file));
+    for (const [file, bytes] of Object.entries(saved)) {
+      const target = path.join(dir, file);
+      if (!fs.existsSync(target) || !fs.readFileSync(target).equals(bytes)) { fs.mkdirSync(path.dirname(target), {recursive: true}); fs.writeFileSync(target, bytes); }
+    }
+  };
+  const saved = snapshot();
+
+  await t.test('a whole store is complete and usable, and both series load from it', () => {
     assert.deepEqual(storeCompleteness(dir), whole);
+    assert.deepEqual(Object.keys(storeCompleteness(dir)), ['complete', 'source', 'sourceIsExchange', 'usable', 'problems', 'emptyResponseMonths',
+      'lastBucketMissingMonths', 'rowsByMonth']);
+    assert.deepEqual([whole.complete, whole.sourceIsExchange, whole.usable], [true, true, true]);
+    // A month of 31, 29, 28 and 30 days and the last month, which stops at 2025-09-30T00:00Z: requests, then rows.
+    assert.deepEqual(['2020-01', '2020-02', '2021-02', '2021-06', '2025-09'].map(month => requests[month]), [150, 140, 135, 145, 140]);
+    assert.deepEqual(['2020-01', '2020-02', '2021-02', '2021-06', '2025-09'].map(month => whole.rowsByMonth.LINK[month]), [151, 141, 136, 146, 141]);
+    assert.deepEqual([Object.keys(whole.rowsByMonth), Object.keys(whole.rowsByMonth.BTC), Object.keys(whole.rowsByMonth.LINK)], [ASSETS, months, months]);
     for (const asset of ASSETS) {
       const series = loadSeries(dir, asset);
-      assert.deepEqual([series.time.length, series.time[0], series.time.at(-1)], [138, EXPLORATION_FROM + MINUTE, RESERVED_FROM]);
+      assert.deepEqual([series.time.length, series.time[0], series.time.at(-1)], [10150 + 69, EXPLORATION_FROM + MINUTE, RESERVED_FROM]);
     }
     assert.deepEqual(Object.keys(receiptsSummary(dir).BTC.sha256), months);
-    assert.deepEqual([receiptsSummary(dir).BTC.files, receiptsSummary(dir).BTC.receipts, receiptsSummary(dir).LINK.files, receiptsSummary(dir).LINK.receipts], [69, 69, 69, 69]);
+    assert.deepEqual([receiptsSummary(dir).BTC.files, receiptsSummary(dir).BTC.receipts, receiptsSummary(dir).LINK.files, receiptsSummary(dir).LINK.receipts], [69, 10150, 69, 10150]);
     assert.deepEqual(Object.keys(publicManifest(dir).assets.LINK.months), months);
   });
 
-  await t.test('the source is reported, not judged: only the exact exchange label is sourceIsExchange', () => {
-    const original = fs.readFileSync(manifestFile(dir), 'utf8');
-    for (const source of [LOOPBACK_SOURCE, 'synthetic test store', `${SOURCE} `, SOURCE.toLowerCase(), 'https://api.exchange.coinbase.com', '']) {
+  await t.test('the label is reported, and the receipts are held to the origin it names: usable is the exchange label on receipts that name the exchange', () => {
+    // A label the fetcher never writes names no origin: the same files are a complete store, and not the exchange's.
+    for (const source of ['synthetic test store', `${SOURCE} `, SOURCE.toLowerCase(), 'https://api.exchange.coinbase.com', '']) {
       editManifest(dir, manifest => { manifest.source = source; });
-      assert.deepEqual(storeCompleteness(dir), {complete: true, source, sourceIsExchange: false, problems: []});
+      assert.deepEqual(storeCompleteness(dir), {...whole, source, sourceIsExchange: false, usable: false});
     }
-    fs.writeFileSync(manifestFile(dir), original);
+    // The loopback label on receipts that name the exchange: label and receipts contradict each other in every month.
+    editManifest(dir, manifest => { manifest.source = LOOPBACK_SOURCE; });
+    assert.deepEqual(storeCompleteness(dir), {...whole, complete: false, source: LOOPBACK_SOURCE, sourceIsExchange: false, usable: false,
+      problems: ASSETS.flatMap(asset => months.map(month => ({asset, month,
+        problem: 'receipt 1 names https://api.exchange.coinbase.com, and this store is labelled as fetched from a loopback test server'})))});
+    restore(saved);
     assert.deepEqual(storeCompleteness(dir), whole);
+    // The other way round, the edit a verifier made: a store whose receipts name a loopback server is complete under
+    // its own label and never usable; with its label changed to the exchange's, every month's receipts say otherwise.
+    const loopback = tmp(t);
+    writeWholeStore(loopback, LOOPBACK_SOURCE, 'http://127.0.0.1:9');
+    assert.deepEqual(storeCompleteness(loopback), {...whole, source: LOOPBACK_SOURCE, sourceIsExchange: false, usable: false});
+    editManifest(loopback, manifest => { manifest.source = SOURCE; });
+    assert.deepEqual(storeCompleteness(loopback), {...whole, complete: false, usable: false,
+      problems: ASSETS.flatMap(asset => months.map(month => ({asset, month,
+        problem: 'receipt 1 names http://127.0.0.1:9, and this store is labelled as fetched from https://api.exchange.coinbase.com'})))});
   });
 
   await t.test('each way a month can fall short is named, and nothing else is', () => {
     const flip = file => { const bytes = fs.readFileSync(file); bytes[bytes.length - 1] ^= 1; fs.writeFileSync(file, bytes); };
     const entryOf = (manifest, asset, month) => manifest.assets[asset].months[month];
     const cases = [
-      ['no entry', 'LINK', '2021-07', manifest => { delete manifest.assets.LINK.months['2021-07']; }, /^missing: the manifest has no entry for this month$/],
+      ['no entry', 'LINK', '2021-07', manifest => { delete manifest.assets.LINK.months['2021-07']; fs.rmSync(candleFile(dir, 'LINK', '2021-07')); fs.rmSync(receiptsFile(dir, 'LINK', '2021-07')); },
+        /^missing: the manifest has no entry for this month$/],
       ['not complete', 'BTC', '2020-01', manifest => { entryOf(manifest, 'BTC', '2020-01').complete = false; }, /^not marked complete$/],
       ['complete is not true', 'BTC', '2020-01', manifest => { entryOf(manifest, 'BTC', '2020-01').complete = 'yes'; }, /^not marked complete$/],
       ['ends one minute early', 'BTC', '2023-02', manifest => { entryOf(manifest, 'BTC', '2023-02').to = '2023-02-28T23:59:00.000Z'; },
@@ -1253,19 +1388,23 @@ test('storeCompleteness: every month of 2020-01 to 2025-09, whole, for both asse
         /^no receipts file is bound to this month \(the entry has no receiptsSha256\)$/],
       ['candle file changed', 'BTC', '2021-01', () => flip(candleFile(dir, 'BTC', '2021-01')), /^does not verify against the manifest: candle file SHA-256 disagrees with the manifest$/],
       ['candle file gone', 'LINK', '2025-09', () => fs.rmSync(candleFile(dir, 'LINK', '2025-09')), /^does not verify against the manifest: candle file unreadable \(ENOENT\)$/],
-      ['row count wrong', 'BTC', '2024-12', manifest => { entryOf(manifest, 'BTC', '2024-12').rows = 3; }, /^does not verify against the manifest: candle file holds 2 rows, the manifest says 3$/],
+      ['row count wrong', 'BTC', '2024-12', manifest => { entryOf(manifest, 'BTC', '2024-12').rows = 3; }, /^does not verify against the manifest: candle file holds 151 rows, the manifest says 3$/],
       ['receipts file changed', 'BTC', '2021-01', () => flip(receiptsFile(dir, 'BTC', '2021-01')), /^does not verify against the manifest: receipts file SHA-256 disagrees with the manifest$/],
-      ['receipts file gone', 'LINK', '2022-06', () => fs.rmSync(receiptsFile(dir, 'LINK', '2022-06')), /^does not verify against the manifest: receipts file unreadable \(ENOENT\)$/]
+      ['receipts file gone', 'LINK', '2022-06', () => fs.rmSync(receiptsFile(dir, 'LINK', '2022-06')), /^does not verify against the manifest: receipts file unreadable \(ENOENT\)$/],
+      // Amendment 2: "A month that holds no row for an asset is not complete." Here every answer of the month was
+      // empty, the files and the entry agree on that, and the receipts cover the month.
+      ['no row', 'LINK', '2022-03', () => writeWholeMonth(dir, 'LINK', '2022-03', {rows: []}), /^holds no row$/],
+      // What the bound receipts say: one way here, a file replaced and re-bound to its entry by hand. The test after
+      // this one goes through every way they can disagree with the label and the entry.
+      ['receipts of another month, re-bound', 'LINK', '2024-07', () => rebindReceipts(dir, 'LINK', '2024-07', fs.readFileSync(receiptsFile(dir, 'LINK', '2024-06'), 'utf8')),
+        /^receipt 1 asks for the buckets 2024-06-01T00:00:00\.000Z to 2024-06-01T04:59:00\.000Z, which are not all inside the stored range 2024-07-01T00:00:00\.000Z to 2024-08-01T00:00:00\.000Z$/]
     ];
-    const snapshot = () => Object.fromEntries(filesIn(dir).map(file => [file, fs.readFileSync(path.join(dir, file))]));
-    const restore = saved => { for (const [file, bytes] of Object.entries(saved)) fs.writeFileSync(path.join(dir, file), bytes); };
-    const saved = snapshot();
     for (const [name, asset, month, damage, problem] of cases) {
       const manifest = readManifestFile(dir);
       damage(manifest);
       if (damage.length) fs.writeFileSync(manifestFile(dir), JSON.stringify(manifest));
       const result = storeCompleteness(dir);
-      assert.deepEqual([result.complete, result.source, result.sourceIsExchange, result.problems.length], [false, SOURCE, true, 1], name);
+      assert.deepEqual([result.complete, result.source, result.sourceIsExchange, result.usable, result.problems.length], [false, SOURCE, true, false, 1], `${name}: ${said(result).join(' | ')}`);
       assert.deepEqual([result.problems[0].asset, result.problems[0].month], [asset, month], name);
       assert.deepEqual(Object.keys(result.problems[0]), ['asset', 'month', 'problem']);
       assert.match(result.problems[0].problem, problem, name);
@@ -1273,12 +1412,122 @@ test('storeCompleteness: every month of 2020-01 to 2025-09, whole, for both asse
       assert.deepEqual(storeCompleteness(dir), whole, `restored after: ${name}`);
     }
     // Several at once come back in asset order, then month order; an asset absent from the manifest lacks every month.
+    // The files of the months that lost their entry are still on disk, and each is reported after those: a candle or
+    // receipts file that no manifest entry names.
     editManifest(dir, manifest => { delete manifest.assets.LINK; delete manifest.assets.BTC.months['2025-09']; manifest.assets.BTC.months['2020-05'].complete = false; });
-    const many = storeCompleteness(dir);
-    assert.equal(many.complete, false);
-    assert.deepEqual(many.problems.map(problem => [problem.asset, problem.month]), [['BTC', '2020-05'], ['BTC', '2025-09'], ...months.map(month => ['LINK', month])]);
-    assert.ok(many.problems.slice(2).every(problem => /^missing: /.test(problem.problem)));
+    const many = storeCompleteness(dir), unnamed = (kind, asset, month, extension) =>
+      `${asset} ${month}: not in the manifest: ${kind}/${asset}/${month}.${extension} is in the store directory and no manifest entry names it`;
+    assert.deepEqual([many.complete, many.usable], [false, false]);
+    assert.deepEqual(said(many), ['BTC 2020-05: not marked complete', 'BTC 2025-09: missing: the manifest has no entry for this month',
+      ...months.map(month => `LINK ${month}: missing: the manifest has no entry for this month`),
+      unnamed('candles', 'BTC', '2025-09', 'f64'), ...months.map(month => unnamed('candles', 'LINK', month, 'f64')),
+      unnamed('receipts', 'BTC', '2025-09', 'jsonl'), ...months.map(month => unnamed('receipts', 'LINK', month, 'jsonl'))]);
+    assert.deepEqual(Object.keys(many.problems.at(-1)), ['asset', 'month', 'problem']);
+    // The rows of a month that is not marked complete, or has no entry, are not rows the loader reads: 0.
+    assert.deepEqual(many.rowsByMonth, {BTC: {...whole.rowsByMonth.BTC, '2020-05': 0, '2025-09': 0}, LINK: Object.fromEntries(months.map(month => [month, 0]))});
     restore(saved);
+    assert.deepEqual(storeCompleteness(dir), whole);
+  });
+
+  await t.test('a month the manifest lists outside 2020-01 to 2025-09 is a problem, with rows or without', () => {
+    // The first held-out month with rows, as a verifier added it: the loader refuses the store, and now the check says why.
+    writeStore(dir, 'BTC', '2025-10', [handRow(utc('2025-10-01'))], {from: '2025-10-01T00:00:00.000Z', to: '2025-11-01T00:00:00.000Z'}, undefined,
+      receiptsFor('BTC', utc('2025-10-01'), utc('2025-11-01'), [handRow(utc('2025-10-01'))]));
+    assert.throws(() => loadSeries(dir, 'BTC'), /BTC 2025-10 row 0: bucket start 2025-10-01T00:00:00\.000Z is outside the exploration range/);
+    assert.deepEqual(storeCompleteness(dir), {...whole, complete: false, usable: false,
+      problems: [{asset: 'BTC', month: '2025-10', problem: 'outside the exploration range: the manifest lists this month'}]});
+    restore(saved);
+    // Without rows such a month loads, and it is no more the protocol's store. Either asset, before the range or
+    // after it; they follow the months of the range, asset by asset in month order.
+    for (const [asset, month] of [['LINK', '2026-10'], ['BTC', '2025-10'], ['LINK', '2019-12'], ['BTC', '2019-12'], ['BTC', '1999-01']]) writeStore(dir, asset, month, []);
+    editManifest(dir, manifest => { delete manifest.assets.BTC.months['2020-01']; });
+    fs.rmSync(candleFile(dir, 'BTC', '2020-01')); fs.rmSync(receiptsFile(dir, 'BTC', '2020-01'));
+    assert.equal(loadSeries(dir, 'LINK').time.length, 10150 + 69);
+    const result = storeCompleteness(dir), outside = 'outside the exploration range: the manifest lists this month';
+    assert.deepEqual([result.complete, result.usable], [false, false]);
+    assert.deepEqual(said(result), ['BTC 2020-01: missing: the manifest has no entry for this month', `BTC 1999-01: ${outside}`, `BTC 2019-12: ${outside}`,
+      `BTC 2025-10: ${outside}`, `LINK 2019-12: ${outside}`, `LINK 2026-10: ${outside}`]);
+    assert.deepEqual(Object.keys(result.rowsByMonth.BTC), months);          // the months of the range, and no other
+    restore(saved);
+    assert.deepEqual(storeCompleteness(dir), whole);
+  });
+
+  await t.test('a candle or receipts file in the directory that no manifest entry names is a problem', () => {
+    const put = (root, file) => { fs.mkdirSync(path.dirname(path.join(root, file)), {recursive: true}); fs.writeFileSync(path.join(root, file), 'anything'); };
+    const unnamed = file => `not in the manifest: ${file} is in the store directory and no manifest entry names it`;
+    // Candles of the held-out range lying in the data directory, as a verifier left them, and their receipts. The
+    // loader never reads them; the check says they are there.
+    put(dir, 'candles/BTC/2025-10.f64'); put(dir, 'receipts/BTC/2025-10.jsonl');
+    assert.equal(loadSeries(dir, 'BTC').time.length, 10150 + 69);
+    assert.deepEqual(storeCompleteness(dir), {...whole, complete: false, usable: false, problems: [{asset: 'BTC', month: '2025-10', problem: unnamed('candles/BTC/2025-10.f64')},
+      {asset: 'BTC', month: '2025-10', problem: unnamed('receipts/BTC/2025-10.jsonl')}]});
+    restore(saved);
+    // Not candle or receipts files: other files beside the manifest, and directories that hold no file.
+    for (const file of ['notes.txt', 'manifest.json.tmp', 'copy/readme.md']) put(dir, file);
+    fs.mkdirSync(path.join(dir, 'candles', 'BTC', '2021-06.f64.tmp'));
+    fs.mkdirSync(path.join(dir, 'receipts', 'ETH'));
+    assert.deepEqual(storeCompleteness(dir), whole);
+    restore(saved);
+    for (const empty of ['copy', 'candles/BTC/2021-06.f64.tmp', 'receipts/ETH']) fs.rmdirSync(path.join(dir, empty));
+    assert.deepEqual(storeCompleteness(dir), whole);
+
+    // Each kind of such a file, one at a time, in a store that holds one month. Its other 137 asset-months are
+    // missing and are named first; `asset` and `month` are the file's directory and its name up to the first dot.
+    const small = tmp(t), unnamedFiles = () => storeCompleteness(small).problems.slice(137);
+    writeWholeMonth(small, 'BTC', '2021-06');
+    assert.deepEqual([storeCompleteness(small).problems.length, unnamedFiles()], [137, []]);
+    const cases = [
+      ['candles/BTC/2025-10.f64', 'BTC', '2025-10'], ['receipts/BTC/2025-10.jsonl', 'BTC', '2025-10'],
+      // The files of a month of the range whose entry was never written (a fetch stopped before its last write).
+      ['candles/LINK/2021-06.f64', 'LINK', '2021-06'], ['receipts/LINK/2021-06.jsonl', 'LINK', '2021-06'],
+      // What a write stopped half way leaves behind; a file of an asset the store does not have; a file deeper down.
+      ['candles/BTC/2021-06.f64.tmp', 'BTC', '2021-06'], ['candles/ETH/2020-01.f64', 'ETH', '2020-01'], ['receipts/BTC/old/2020-01.jsonl', 'old', '2020-01'],
+      ['candles/notes.txt', 'candles', 'notes'], ['receipts/BTC/2021-06.jsonl.bak', 'BTC', '2021-06'],
+      // Outside the two trees a file counts by what it is: rows of candles (.f64), or lines of receipts (.jsonl).
+      ['2025-10.f64', '', '2025-10'], ['copy/LINK-2025-11.jsonl', 'copy', 'LINK-2025-11']
+    ];
+    for (const [file, asset, month] of cases) {
+      put(small, file);
+      assert.deepEqual(unnamedFiles(), [{asset, month, problem: unnamed(file)}], file);
+      fs.rmSync(path.join(small, file));
+    }
+    // Several come back in path order, after the months of the range and the months the manifest lists outside it.
+    for (const [file] of cases) put(small, file);
+    writeStore(small, 'LINK', '2025-10', []);
+    assert.deepEqual(unnamedFiles(), [{asset: 'LINK', month: '2025-10', problem: 'outside the exploration range: the manifest lists this month'},
+      ...['2025-10.f64', 'candles/BTC/2021-06.f64.tmp', 'candles/BTC/2025-10.f64', 'candles/ETH/2020-01.f64', 'candles/LINK/2021-06.f64', 'candles/notes.txt', 'copy/LINK-2025-11.jsonl',
+        'receipts/BTC/2021-06.jsonl.bak', 'receipts/BTC/2025-10.jsonl', 'receipts/BTC/old/2020-01.jsonl', 'receipts/LINK/2021-06.jsonl'].map(file => {
+        const [, asset, month] = cases.find(([name]) => name === file);
+        return {asset, month, problem: unnamed(file)};
+      })]);
+    // The month's own two files are named by its entry, and stay unreported.
+    assert.deepEqual(storeCompleteness(small).problems.filter(problem => problem.asset === 'BTC' && problem.month === '2021-06' && !problem.problem.includes('.tmp') && !problem.problem.includes('.bak')), []);
+  });
+
+  await t.test('what the manifest notes per month comes back with the verdict: empty answers, a missing last bucket, rows', () => {
+    // Two months that are complete and say something worth stating in a record: three answers of BTC 2022-02 were
+    // empty, and no row came back for the last wanted bucket of LINK 2023-07 (the entry's notes; rows are untouched).
+    editManifest(dir, manifest => { manifest.assets.BTC.months['2022-02'].emptyResponses = 3; manifest.assets.LINK.months['2023-07'].lastBucketPresent = false; });
+    assert.deepEqual(storeCompleteness(dir), {...whole, emptyResponseMonths: [{asset: 'BTC', month: '2022-02', emptyResponses: 3}],
+      lastBucketMissingMonths: [{asset: 'LINK', month: '2023-07'}]});
+    // Both lists are in asset order, then month order, and leave out a month that is not marked complete (the loader
+    // does not read it) and a month outside the range.
+    editManifest(dir, manifest => {
+      for (const [asset, month, empty] of [['LINK', '2020-01', 1], ['BTC', '2025-09', 140], ['BTC', '2020-01', 2], ['LINK', '2021-12', 7]])
+        Object.assign(manifest.assets[asset].months[month], {emptyResponses: empty, lastBucketPresent: false});
+      manifest.assets.LINK.months['2021-12'].complete = false;
+      for (const month of ['2024-01', '2024-02']) Object.assign(manifest.assets.LINK.months[month], {emptyResponses: 0, lastBucketPresent: true});
+      delete manifest.assets.LINK.months['2024-03'].emptyResponses; delete manifest.assets.LINK.months['2024-03'].lastBucketPresent;
+    });
+    writeStore(dir, 'BTC', '2025-10', [], {emptyResponses: 150, lastBucketPresent: false});
+    const result = storeCompleteness(dir);
+    assert.deepEqual(result.emptyResponseMonths, [{asset: 'BTC', month: '2020-01', emptyResponses: 2}, {asset: 'BTC', month: '2022-02', emptyResponses: 3},
+      {asset: 'BTC', month: '2025-09', emptyResponses: 140}, {asset: 'LINK', month: '2020-01', emptyResponses: 1}]);
+    assert.deepEqual(result.lastBucketMissingMonths, [{asset: 'BTC', month: '2020-01'}, {asset: 'BTC', month: '2025-09'}, {asset: 'LINK', month: '2020-01'}, {asset: 'LINK', month: '2023-07'}]);
+    assert.deepEqual(result.rowsByMonth, {BTC: whole.rowsByMonth.BTC, LINK: {...whole.rowsByMonth.LINK, '2021-12': 0}});
+    assert.deepEqual(said(result), ['LINK 2021-12: not marked complete', 'BTC 2025-10: outside the exploration range: the manifest lists this month']);
+    restore(saved);
+    assert.deepEqual(storeCompleteness(dir), whole);
   });
 
   await t.test('months the fetcher stored: whole months pass, a month fetched for part of its days does not', async () => {
@@ -1295,12 +1544,240 @@ test('storeCompleteness: every month of 2020-01 to 2025-09, whole, for both asse
     assert.deepEqual([summary.assets.BTC.fetched, summary.assets.BTC.skipped], [1, 1]);
     assert.deepEqual(about('2025-09'), []);
     const result = storeCompleteness(fetched);
-    assert.deepEqual([result.complete, result.source, result.sourceIsExchange, result.problems.length], [false, LOOPBACK_SOURCE, false, 2 * 67]);
+    assert.deepEqual([result.complete, result.source, result.sourceIsExchange, result.usable, result.problems.length], [false, LOOPBACK_SOURCE, false, false, 2 * 67]);
     assert.ok(result.problems.every(problem => problem.problem === 'missing: the manifest has no entry for this month' && problem.month < '2025-08'));
     assert.equal(readManifestFile(fetched).assets.BTC.months['2025-09'].lastClose, RESERVED_FROM);
     assert.deepEqual(receiptsSummary(fetched).BTC, {files: 2, receipts: 150 + 140, sha256: Object.fromEntries(['2025-08', '2025-09'].map(month =>
       [month, sha(fs.readFileSync(receiptsFile(fetched, 'BTC', month)))]))});
+    // The rows it reports are the rows the loader reads, month by month; a month without an entry has none.
+    for (const asset of ASSETS) {
+      assert.deepEqual(Object.entries(result.rowsByMonth[asset]).filter(([, rows]) => rows > 0), [['2025-08', expectedRows(asset, utc('2025-08-01'), utc('2025-09-01')).length],
+        ['2025-09', expectedRows(asset, utc('2025-09-01'), RESERVED_FROM).length]]);
+      assert.equal(Object.values(result.rowsByMonth[asset]).reduce((sum, rows) => sum + rows, 0), loadSeries(fetched, asset).time.length);
+    }
+    assert.deepEqual([result.emptyResponseMonths, result.lastBucketMissingMonths], [[], []]);
   });
+});
+
+// What the bound receipts say. Every store below agrees with its manifest hash for hash, so the loader loads it:
+// nothing but reading the receipts can tell these months from fetched ones. That raises the cost of an accident or of
+// a hand edit; it proves nothing about where a file came from, and the last case of each kind says what passes.
+test('storeCompleteness reads each month\'s bound receipts and holds them against the label and the manifest entry', async t => {
+  const MONTH = '2021-06', [FROM, TO] = wholeMonth(MONTH), rows = monthRows(MONTH), chunks = chunksOf(FROM, TO), EXCHANGE = 'https://api.exchange.coinbase.com';
+  const good = options => receiptsFor('BTC', FROM, TO, rows, options);
+  assert.deepEqual([iso(FROM), iso(TO), chunks.length, rows.length, good().reduce((sum, receipt) => sum + receipt.rowCount, 0)],
+    ['2021-06-01T00:00:00.000Z', '2021-07-01T00:00:00.000Z', 145, 146, 290]);
+  // A store that holds this one month of BTC: written as a fetch of it would leave it, then given `receipts` by a
+  // hand edit that binds them (rebindReceipts). Returns what storeCompleteness says about the month, [] for nothing.
+  const said = ({source = SOURCE, receipts = good(), stored = rows, overrides = {}} = {}) => {
+    const dir = tmp(t);
+    writeWholeMonth(dir, 'BTC', MONTH, {source, rows: stored, receipts: good(), overrides});
+    rebindReceipts(dir, 'BTC', MONTH, receiptsText(receipts));
+    assert.equal(loadSeries(dir, 'BTC').time.length, stored.length);        // the loader has no objection
+    const result = storeCompleteness(dir), mine = result.problems.filter(problem => problem.asset === 'BTC' && problem.month === MONTH);
+    // The other 137 asset-months are missing, and at most one thing is said about this one.
+    assert.deepEqual([result.complete, result.usable, result.problems.length - mine.length, mine.length <= 1], [false, false, 137, true]);
+    return mine.map(problem => problem.problem);
+  };
+  const change = (n, edit) => good().map((receipt, i) => (i === n - 1 ? edit(receipt) : receipt));     // receipt n, counted from 1
+  const url = (start, end, {origin = COINBASE_URL, asset = 'BTC'} = {}) => requestUrl(origin, asset, start, end);
+  const asks = (n, start, end) => change(n, receipt => ({...receipt, url: url(start, end)}));
+  const line = n => `line ${n} of the receipts file is not a JSON receipt`;
+  const notRequest = n => `receipt ${n} does not name a one-minute candle request for BTC-USD`;
+  const names = (n, origin, label) => `receipt ${n} names ${origin}, and this store is labelled as fetched from ${label}`;
+  const outside = (n, start, end) => `receipt ${n} asks for the buckets ${iso(start)} to ${iso(end)}, which are not all inside the stored range 2021-06-01T00:00:00.000Z to 2021-07-01T00:00:00.000Z`;
+  const noDate = n => `receipt ${n} carries no HTTP date, and this store is labelled as fetched from the exchange`;
+  const count = n => `holds ${n} receipts, and a fetch of the stored range 2021-06-01T00:00:00.000Z to 2021-07-01T00:00:00.000Z makes 145 requests`;
+  const gap = start => `the receipts' requests do not cover the stored range: none asks for the bucket starting ${iso(start)}`;
+  const fewer = (counted, stored = 146, twice = 144) => `the receipts count ${counted} rows, fewer than the ${stored} stored rows plus ${twice} returned twice`;
+
+  await t.test('receipts as a fetch leaves them say nothing; nor does their order, a body with rows the fetcher ignored, or a field more', () => {
+    assert.deepEqual(said(), []);
+    assert.deepEqual(said({receipts: good().reverse()}), []);
+    assert.deepEqual(said({receipts: change(3, receipt => ({...receipt, rowCount: receipt.rowCount + 7}))}), []);
+    assert.deepEqual(said({receipts: change(3, receipt => ({...receipt, note: 'one more field'}))}), []);
+  });
+
+  await t.test('a line that is not a JSON receipt', () => {
+    assert.deepEqual(said({receipts: ['not a receipt']}), [line(1)]);       // the file a verifier bound: one line of text, re-hashed
+    for (const text of ['not a receipt', '{"url":', '[]', 'null', '7', '"text"', '{}'])
+      assert.deepEqual(said({receipts: change(3, () => text)}), [line(3)], text);
+    for (const key of ['url', 'receivedAt', 'sha256', 'rowCount', 'attempts'])
+      assert.deepEqual(said({receipts: change(5, ({[key]: left, ...rest}) => rest)}), [line(5)], `without ${key}`);
+    for (const [key, value] of [['url', 5], ['url', null], ['url', ['https://api.exchange.coinbase.com']], ['receivedAt', '0'], ['receivedAt', 1.5], ['httpDate', 5],
+      ['httpDate', [HTTP_DATE]], ['sha256', 'abc'], ['sha256', sha('x').toUpperCase()], ['sha256', `${sha('x')}0`], ['sha256', [sha('x')]], ['sha256', null],
+      ['rowCount', -1], ['rowCount', 1.5], ['rowCount', '2'], ['rowCount', null], ['attempts', 0], ['attempts', 1.5], ['attempts', '1']])
+      assert.deepEqual(said({receipts: change(145, receipt => ({...receipt, [key]: value}))}), [line(145)], `${key}: ${value}`);
+  });
+
+  await t.test('a URL that is not a one-minute candle request for this asset', () => {
+    const [start, end] = chunks[0], right = url(start, end);
+    assert.equal(right, 'https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60&start=2021-06-01T00%3A00%3A00.000Z&end=2021-06-01T04%3A59%3A00.000Z');
+    for (const wrong of ['synthetic:BTC:2021-06', 'synthetic://verifier/BTC/2020-01/0', '', 'not a url', '/products/BTC-USD/candles?granularity=60',
+      url(start, end, {asset: 'LINK'}), right.replace('/candles?', '/ticker?'), right.replace('/candles?', '/candles/?'), right.replace('BTC-USD', 'BTC-EUR'),
+      right.replace('/products/', '/v2/products/'), right.replace('granularity=60', 'granularity=3600'), right.replace('granularity=60&', ''), right.replace(/&end=.*/, ''),
+      right.replace(/start=[^&]*/, 'start=2021-06-01'), right.replace(/start=[^&]*/, `start=${start}`), url(start + 30000, end), url(start, end + 1),
+      right.replace('https://', 'ftp://')])
+      assert.deepEqual(said({receipts: change(1, receipt => ({...receipt, url: wrong}))}), [notRequest(1)], wrong);
+    // The receipts of the other asset's month, as a swap of two months' receipts and bindings leaves them.
+    assert.deepEqual(said({receipts: receiptsFor('LINK', FROM, TO, rows)}), [notRequest(1)]);
+    assert.deepEqual(said({receipts: change(77, receipt => ({...receipt, url: url(...chunks[76], {asset: 'LINK'})}))}), [notRequest(77)]);
+    // Whatever the store is labelled (here its other receipts name an origin that suits each label).
+    for (const source of [LOOPBACK_SOURCE, 'written by hand in a test'])
+      assert.deepEqual(said({source, receipts: good({origin: 'http://127.0.0.1:9'}).map((receipt, i) => (i === 1 ? {...receipt, url: 'synthetic'} : receipt))}), [notRequest(2)], source);
+  });
+
+  await t.test('an origin that is not the one the label names', () => {
+    // Labelled as fetched from the exchange: every receipt must name its origin, exactly.
+    for (const origin of ['http://127.0.0.1:9', 'http://localhost:8080', 'https://api.exchange.coinbase.com.example.com', 'http://api.exchange.coinbase.com',
+      'https://api.exchange.coinbase.com:8443', 'https://api.pro.coinbase.com', 'https://example.com'])
+      assert.deepEqual(said({receipts: good({origin})}), [names(1, origin, EXCHANGE)], origin);
+    assert.deepEqual(said({receipts: change(99, receipt => ({...receipt, url: url(...chunks[98], {origin: 'http://127.0.0.1:9'})}))}), [names(99, 'http://127.0.0.1:9', EXCHANGE)]);
+    // Labelled as a loopback test store: a loopback origin, the fetcher's rule for one (http, 127.0.0.1 or localhost).
+    for (const origin of ['http://127.0.0.1:9', 'http://localhost:8080', 'http://127.0.0.1'])
+      assert.deepEqual(said({source: LOOPBACK_SOURCE, receipts: good({origin})}), [], origin);
+    for (const origin of [EXCHANGE, 'https://127.0.0.1:9', 'http://127.0.0.2:9', 'http://localhost.example.com', 'http://example.com'])
+      assert.deepEqual(said({source: LOOPBACK_SOURCE, receipts: good({origin})}), [names(1, origin, 'a loopback test server')], origin);
+    // Any other label names no origin, so none is asked for. Such a store is not usable whatever its receipts say.
+    for (const origin of [EXCHANGE, 'http://127.0.0.1:9', 'https://example.com'])
+      assert.deepEqual(said({source: 'written by hand in a test', receipts: good({origin})}), [], origin);
+  });
+
+  await t.test('a request that reaches outside the range the entry says was stored', () => {
+    assert.deepEqual(said({receipts: asks(1, FROM - MINUTE, chunks[0][1])}), [outside(1, FROM - MINUTE, chunks[0][1])]);          // starts one bucket early
+    assert.deepEqual(said({receipts: asks(145, chunks[144][0], TO)}), [outside(145, chunks[144][0], TO)]);                       // ends at the first bucket of July
+    assert.deepEqual(said({receipts: asks(9, chunks[8][1], chunks[8][0])}), [outside(9, chunks[8][1], chunks[8][0])]);           // ends before it starts
+    const july = utc('2024-07-01');
+    assert.deepEqual(said({receipts: asks(3, july, july + 299 * MINUTE)}), [outside(3, july, july + 299 * MINUTE)]);             // another month's request
+    // The first and the last bucket of the range are inside it: the receipts of a fetch ask for both.
+    assert.deepEqual([new URL(good()[0].url).searchParams.get('start'), new URL(good()[144].url).searchParams.get('end')], ['2021-06-01T00:00:00.000Z', '2021-06-30T23:59:00.000Z']);
+  });
+
+  await t.test('a receipt without an HTTP date, in a store labelled as fetched from the exchange', () => {
+    assert.deepEqual(said({receipts: good({httpDate: null})}), [noDate(1)]);                // what a stub that sets no Date header leaves
+    for (const httpDate of [null, '', 'synthetic', 'no date at all'])
+      assert.deepEqual(said({receipts: change(31, receipt => ({...receipt, httpDate}))}), [noDate(31)], String(httpDate));
+    assert.deepEqual(said({receipts: change(31, ({httpDate, ...rest}) => rest)}), [noDate(31)]);         // the field left out
+    // No other store is asked for one.
+    for (const source of [LOOPBACK_SOURCE, 'written by hand in a test'])
+      assert.deepEqual(said({source, receipts: good({origin: 'http://127.0.0.1:9', httpDate: null})}), [], source);
+  });
+
+  await t.test('not as many receipts as a fetch of the stored range makes requests', () => {
+    assert.deepEqual(said({receipts: good().slice(0, -1)}), [count(144)]);
+    assert.deepEqual(said({receipts: good().slice(1)}), [count(144)]);
+    assert.deepEqual(said({receipts: [...good(), good()[7]]}), [count(146)]);
+    assert.deepEqual(said({receipts: []}), [count(0)]);
+    // The receipts of a fetch of ten days, under an entry edited to say the whole month (a verifier's edit).
+    assert.deepEqual(said({receipts: receiptsFor('BTC', utc('2021-06-10'), utc('2021-06-20'), rows)}), [count(49)]);
+  });
+
+  await t.test('as many receipts as requests, and a bucket of the stored range that none of them asks for', () => {
+    const copy = (n, of) => change(n, () => good()[of - 1]);                // receipt n replaced by a copy of receipt `of`
+    assert.deepEqual(said({receipts: copy(5, 4)}), [gap(chunks[4][0] + MINUTE)]);           // request 4 still asks for request 5's first bucket, which they share
+    assert.deepEqual(said({receipts: copy(1, 2)}), [gap(FROM)]);
+    assert.deepEqual(said({receipts: copy(145, 1)}), [gap(chunks[144][0] + MINUTE)]);
+    assert.deepEqual(said({receipts: asks(3, chunks[2][0], chunks[2][0])}), [gap(chunks[2][0] + MINUTE)]);                // a request for one bucket
+    assert.deepEqual(said({receipts: asks(3, chunks[2][0], chunks[2][1] - 2 * MINUTE)}), [gap(chunks[2][1] - MINUTE)]);    // two buckets short
+    assert.deepEqual(said({receipts: asks(145, chunks[144][0], TO - 2 * MINUTE)}), [gap(TO - MINUTE)]);                   // the last bucket of the month
+    // One bucket short is still covered: the next request asks for that bucket too. That is what sharing one is for.
+    assert.deepEqual(said({receipts: asks(3, chunks[2][0], chunks[2][1] - MINUTE)}), []);
+  });
+
+  await t.test('receipts that count fewer rows than the month stores', () => {
+    assert.deepEqual(said({receipts: change(10, receipt => ({...receipt, rowCount: receipt.rowCount - 1}))}), [fewer(289)]);
+    assert.deepEqual(said({receipts: good().map(receipt => ({...receipt, rowCount: 0}))}), [fewer(0)]);
+    // A row added to the candle file by hand, the entry's rows and SHA-256 rewritten to match.
+    const added = [rows[0], handRow(FROM + MINUTE, 99), ...rows.slice(1)];
+    assert.deepEqual(said({stored: added, overrides: {duplicateRows: 144}}), [fewer(290, 147)]);
+    // What this cannot notice (dataset.mjs says so): rows removed by hand, the entry rewritten to match, as a verifier
+    // cut a month to its first half. The receipts then count more rows than are stored, as they may.
+    assert.deepEqual(said({stored: rows.slice(0, 73), overrides: {duplicateRows: 72}}), []);
+    // An entry that does not say how many rows came back twice is held to its stored rows alone.
+    assert.deepEqual(said({overrides: {duplicateRows: undefined}}), []);
+    assert.deepEqual(said({overrides: {duplicateRows: undefined}, receipts: change(1, receipt => ({...receipt, rowCount: 0})).map(receipt => ({...receipt, rowCount: Math.min(receipt.rowCount, 1)}))}),
+      [fewer(144, 146, 0)]);
+  });
+
+  await t.test('a month that holds no row, whatever its receipts say', () => {
+    assert.deepEqual(said({stored: [], receipts: good().map(receipt => ({...receipt, rowCount: 0}))}), ['holds no row']);   // every answer empty: what the fetcher stores then
+    assert.deepEqual(said({stored: []}), ['holds no row']);
+    assert.deepEqual(said({stored: [], source: LOOPBACK_SOURCE, receipts: ['not a receipt']}), ['holds no row']);
+  });
+
+  await t.test('one problem a month: the first receipt that disagrees, by the first check it fails, and the whole file after every receipt', () => {
+    // A stub's store from a loopback base, relabelled as the exchange's: the origin, before the date its receipts lack.
+    assert.deepEqual(said({receipts: good({origin: 'http://127.0.0.1:9', httpDate: null})}), [names(1, 'http://127.0.0.1:9', EXCHANGE)]);
+    // Receipt 1 names another origin and line 2 is not a receipt: receipt 1 comes first.
+    assert.deepEqual(said({receipts: [{...good()[0], url: url(...chunks[0], {origin: 'https://example.com'})}, 'not a receipt', ...good().slice(2)]}), [names(1, 'https://example.com', EXCHANGE)]);
+    // A receipt without a date among too few receipts that count too few rows: the receipt comes first, then the number.
+    const short = change(4, receipt => ({...receipt, httpDate: null})).slice(0, 100).map(receipt => ({...receipt, rowCount: 0}));
+    assert.deepEqual(said({receipts: short}), [noDate(4)]);
+    assert.deepEqual(said({receipts: short.map(receipt => ({...receipt, httpDate: HTTP_DATE}))}), [count(100)]);
+    // Enough receipts, a bucket nobody asks for, and too few rows counted: the bucket comes before the rows.
+    assert.deepEqual(said({receipts: change(5, () => good()[3]).map(receipt => ({...receipt, rowCount: 0}))}), [gap(chunks[4][0] + MINUTE)]);
+  });
+});
+
+// The reproduction of the verifier who found that the receipts were never read, step by step, on a store the fetcher
+// wrote: 20,300 requests answered by a stub, nothing connected to.
+test('a whole store the fetcher wrote is complete as it is, and a hand edit of its manifest is contradicted by its receipts', async t => {
+  const dir = tmp(t), months = explorationMonths();
+  // One row an answer, the request's first bucket.
+  const oneRow = async url => new Response(JSON.stringify([[Date.parse(new URL(url).searchParams.get('start')) / 1000, 1, 4, 2, 3, 5]]));
+  const run = extra => fetchCandles({dir, baseUrl: 'http://127.0.0.1:9', pauseMs: 0, fetchImpl: oneRow, log: quiet, ...extra});
+  const verdict = () => { const result = storeCompleteness(dir); return [result.complete, result.sourceIsExchange, result.usable, result.problems.map(problem => `${problem.asset} ${problem.month}: ${problem.problem}`)]; };
+  const swap = (a, b, keys) => { for (const key of keys) [a[key], b[key]] = [b[key], a[key]]; };
+  const swapFiles = (a, b) => { const [x, y] = [fs.readFileSync(a), fs.readFileSync(b)]; fs.writeFileSync(a, y); fs.writeFileSync(b, x); };
+  const loopback = 'receipt 1 names http://127.0.0.1:9, and this store is labelled as fetched from https://api.exchange.coinbase.com';
+
+  // 1. As fetched: every month present, whole, with rows, and receipts that agree. A loopback store: complete, not usable.
+  assert.equal((await run({})).requests, 20300);
+  const fetched = storeCompleteness(dir);
+  assert.deepEqual(fetched, {complete: true, source: LOOPBACK_SOURCE, sourceIsExchange: false, usable: false, problems: [], emptyResponseMonths: [],
+    // This stub never answers with a month's last bucket, and the fetcher noted that for every month.
+    lastBucketMissingMonths: ASSETS.flatMap(asset => months.map(month => ({asset, month}))),
+    rowsByMonth: Object.fromEntries(ASSETS.map(asset => [asset, Object.fromEntries(months.map(month => [month, chunksOf(...wholeMonth(month)).length]))]))});
+  assert.equal((await run({})).requests, 0);              // and the fetcher keeps every month of it
+
+  // 2. One month fetched again for ten of its days only.
+  fs.rmSync(candleFile(dir, 'LINK', '2021-06'));
+  await run({from: '2021-06-10', to: '2021-06-20', assets: ['LINK']});
+  assert.deepEqual(verdict(), [false, false, false, ['LINK 2021-06: stored for 2021-06-10T00:00:00.000Z to 2021-06-20T00:00:00.000Z, which does not cover the whole month 2021-06-01T00:00:00.000Z to 2021-07-01T00:00:00.000Z']]);
+  // 3. Its entry edited to say the whole month: the 49 bound receipts are not the 145 of a whole June.
+  editManifest(dir, manifest => Object.assign(manifest.assets.LINK.months['2021-06'], {from: '2021-06-01T00:00:00.000Z', to: '2021-07-01T00:00:00.000Z'}));
+  assert.equal(loadSeries(dir, 'LINK').time.length, 10150 - 145 + 49);      // the loader has no objection to it
+  assert.deepEqual(verdict(), [false, false, false, ['LINK 2021-06: holds 49 receipts, and a fetch of the stored range 2021-06-01T00:00:00.000Z to 2021-07-01T00:00:00.000Z makes 145 requests']]);
+  fs.rmSync(candleFile(dir, 'LINK', '2021-06'));
+  assert.equal((await run({assets: ['LINK']})).requests, 145);              // repaired: that month, whole
+  assert.deepEqual(storeCompleteness(dir), fetched);
+
+  // 4. The source label edited to the exchange's: every receipt of the store names 127.0.0.1.
+  editManifest(dir, manifest => { manifest.source = SOURCE; });
+  assert.deepEqual(verdict(), [false, true, false, ASSETS.flatMap(asset => months.map(month => `${asset} ${month}: ${loopback}`))]);
+  editManifest(dir, manifest => { manifest.source = LOOPBACK_SOURCE; });
+  assert.deepEqual(storeCompleteness(dir), fetched);
+
+  // 5. The receipts files of two months swapped: the loader's hash check sees it.
+  const unbound = 'does not verify against the manifest: receipts file SHA-256 disagrees with the manifest';
+  swapFiles(receiptsFile(dir, 'BTC', '2021-03'), receiptsFile(dir, 'LINK', '2024-07'));
+  assert.deepEqual(verdict(), [false, false, false, [`BTC 2021-03: ${unbound}`, `LINK 2024-07: ${unbound}`]]);
+  // 6. ...and their bindings swapped as well: the loader loads both months, and the receipts name the wrong asset.
+  editManifest(dir, manifest => swap(manifest.assets.BTC.months['2021-03'], manifest.assets.LINK.months['2024-07'], ['receipts', 'receiptsSha256', 'requests']));
+  assert.deepEqual([loadSeries(dir, 'BTC').time.length, loadSeries(dir, 'LINK').time.length], [10150, 10150]);
+  assert.deepEqual(verdict(), [false, false, false, ['BTC 2021-03: receipt 1 does not name a one-minute candle request for BTC-USD',
+    'LINK 2024-07: receipt 1 does not name a one-minute candle request for LINK-USD']]);
+  swapFiles(receiptsFile(dir, 'BTC', '2021-03'), receiptsFile(dir, 'LINK', '2024-07'));
+  editManifest(dir, manifest => swap(manifest.assets.BTC.months['2021-03'], manifest.assets.LINK.months['2024-07'], ['receipts', 'receiptsSha256', 'requests']));
+  assert.deepEqual(storeCompleteness(dir), fetched);
+
+  // 7. The same month of the two assets exchanged whole: candles, receipts and entries. Each file matches its entry.
+  swapFiles(candleFile(dir, 'BTC', '2023-05'), candleFile(dir, 'LINK', '2023-05'));
+  swapFiles(receiptsFile(dir, 'BTC', '2023-05'), receiptsFile(dir, 'LINK', '2023-05'));
+  editManifest(dir, manifest => { [manifest.assets.BTC.months['2023-05'], manifest.assets.LINK.months['2023-05']] = [manifest.assets.LINK.months['2023-05'], manifest.assets.BTC.months['2023-05']]; });
+  assert.deepEqual([loadSeries(dir, 'BTC').time.length, loadSeries(dir, 'LINK').time.length], [10150, 10150]);
+  assert.deepEqual(verdict(), [false, false, false, ['BTC 2023-05: receipt 1 does not name a one-minute candle request for BTC-USD',
+    'LINK 2023-05: receipt 1 does not name a one-minute candle request for LINK-USD']]);
 });
 
 test('seriesFromRows and coverage on the bundled sample and on small synthetic series', () => {
@@ -1346,9 +1823,9 @@ const TO_LOOPBACK = `const real = globalThis.fetch; globalThis.fetch = (url, ini
   if (target.origin !== 'https://api.exchange.coinbase.com') { console.error('NETWORK ATTEMPT'); process.exit(97); }
   return real(process.env.TEST_CANDLE_SERVER + target.pathname + target.search, init);
 };`;
-function cli(args, preload, env = {}) {
-  return new Promise(resolve => execFile(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(preload)}`, CLI, ...args],
-    {env: {PATH: process.env.PATH, ...env}}, (error, stdout, stderr) => resolve({code: error ? error.code : 0, stdout, stderr})));
+function cli(args, preload, env = {}, {nodeArgs = [], cwd} = {}) {
+  return new Promise(resolve => execFile(process.execPath, [...nodeArgs, '--import', `data:text/javascript,${encodeURIComponent(preload)}`, CLI, ...args],
+    {env: {PATH: process.env.PATH, ...env}, cwd}, (error, stdout, stderr) => resolve({code: error ? error.code : 0, stdout, stderr})));
 }
 
 test('command line: refusals exit 1 before any request, with no flag that moves the bounds or the host', async t => {
@@ -1379,9 +1856,13 @@ test('command line: refusals exit 1 before any request, with no flag that moves 
   }
   assert.deepEqual(fs.readdirSync(dir), []);
   // The proxy hints: one when HTTPS_PROXY is set and NODE_USE_ENV_PROXY is not 1, one when HTTPS_PROXY is set and
-  // NODE_EXTRA_CA_CERTS is not (a proxy that re-signs TLS needs its CA bundle there).
-  const hint = /^hint: HTTPS_PROXY is set but NODE_USE_ENV_PROXY is not 1/m, refused = ['--dir', dir, '--to', '2025-10-01'];
-  const caHint = /^hint: HTTPS_PROXY is set but NODE_EXTRA_CA_CERTS is not; a proxy that re-signs TLS needs its CA bundle there \(NODE_EXTRA_CA_CERTS=\/path\/to\/ca-bundle\.pem\)/m;
+  // NODE_EXTRA_CA_CERTS is not (a proxy that re-signs TLS needs its CA bundle there). Each says what else supplies
+  // the thing, so it stays true when that is how it is supplied.
+  const hint = /^hint: HTTPS_PROXY is set but NODE_USE_ENV_PROXY is not 1; Node's built-in fetch ignores the proxy unless NODE_USE_ENV_PROXY=1 or --use-env-proxy$/m;
+  const caHint = new RegExp('^hint: HTTPS_PROXY is set but NODE_EXTRA_CA_CERTS is not; a proxy that re-signs TLS needs its CA bundle there ' +
+    '\\(NODE_EXTRA_CA_CERTS=/path/to/ca-bundle\\.pem\\), or every request fails as a network error naming a certificate, ' +
+    'unless the CA is supplied another way, for example --use-openssl-ca$', 'm');
+  const refused = ['--dir', dir, '--to', '2025-10-01'];
   const bundle = path.join(tmp(t), 'ca-bundle.pem'), proxy = {HTTPS_PROXY: 'http://127.0.0.1:9'};
   fs.writeFileSync(bundle, '');
   const hints = async env => { const {stderr} = await cli(refused, NO_NETWORK, env); return [hint.test(stderr), caHint.test(stderr)]; };
@@ -1395,6 +1876,24 @@ test('command line: refusals exit 1 before any request, with no flag that moves 
   assert.deepEqual(await hints({...proxy, NODE_USE_ENV_PROXY: '1', NODE_EXTRA_CA_CERTS: bundle}), [false, false]);
   assert.deepEqual(await hints({}), [false, false]);
   assert.deepEqual(await hints({NODE_EXTRA_CA_CERTS: bundle}), [false, false]);
+  // Supplied through an option of Node itself, on its command line or in NODE_OPTIONS: that hint is left out, and the
+  // other one is not. --use-openssl-ca is an option of every Node 22; the other two are tried where this build has them.
+  const hintsWith = async (env, nodeArgs = []) => {
+    const {code, stderr} = await cli(refused, NO_NETWORK, env, {nodeArgs});
+    assert.equal(code, 1, stderr);                        // the run itself is the refused one: nothing is requested
+    assert.match(stderr, /reserved range/);
+    return [hint.test(stderr), caHint.test(stderr)];
+  };
+  const options = [['--use-openssl-ca', [true, false]], ['--use-system-ca', [true, false]], ['--use-env-proxy', [false, true]]]
+    .filter(([option]) => option === '--use-openssl-ca' || process.allowedNodeEnvironmentFlags.has(option));
+  for (const [option, expected] of options) {
+    assert.deepEqual(await hintsWith(proxy, [option]), expected, `${option} on the command line`);
+    assert.deepEqual(await hintsWith({...proxy, NODE_OPTIONS: option}), expected, `${option} in NODE_OPTIONS`);
+    assert.deepEqual(await hintsWith({...proxy, NODE_OPTIONS: `--no-warnings  ${option}`}), expected, `${option} after another option in NODE_OPTIONS`);
+    assert.deepEqual(await hintsWith({NODE_OPTIONS: option}), [false, false], `${option} without a proxy`);
+  }
+  assert.deepEqual(await hintsWith({...proxy, NODE_USE_ENV_PROXY: '1'}, ['--use-openssl-ca']), [false, false]);
+  assert.deepEqual(await hintsWith({...proxy, NODE_EXTRA_CA_CERTS: bundle, NODE_OPTIONS: '--no-warnings'}), [true, false]);   // an option that supplies neither
   assert.match((await cli(['--help'], NO_NETWORK)).stdout, /^usage: node research\/fetch-candles\.mjs \[--from YYYY-MM-DD\]/);
 });
 
@@ -1412,4 +1911,58 @@ test('command line: a small fetch prints progress on stderr and a JSON summary o
   assert.deepEqual(server.state.requests.map(request => [request.start, request.end]), chunksOf(utc('2025-09-29'), RESERVED_FROM));
   assert.deepEqual(readRows(candleFile(dir, 'BTC', '2025-09')), rows);
   assert.ok(readReceipts(dir, 'BTC', '2025-09').every(receipt => receipt.url.startsWith('https://api.exchange.coinbase.com/products/BTC-USD/candles?')));
+});
+
+// The command line passes no fetch of its own, so it may use the default store: .research-data under the working
+// directory. Run in a scratch working directory; the loopback server answers in place of the exchange.
+test('command line: without --dir the store is .research-data under the working directory, labelled as the exchange\'s', async t => {
+  const server = await startServer(t), cwd = tmp(t), rows = expectedRows('BTC', utc('2025-09-29'), RESERVED_FROM);
+  const result = await cli(['--from', '2025-09-29', '--to', '2025-09-30', '--assets', 'BTC', '--pause-ms', '200'], TO_LOOPBACK, {TEST_CANDLE_SERVER: server.baseUrl}, {cwd});
+  assert.equal(result.code, 0, result.stderr);
+  const summary = JSON.parse(result.stdout), store = path.join(cwd, '.research-data');
+  assert.deepEqual([summary.ok, summary.dir, summary.source, summary.requests, summary.assets.BTC.rows], [true, '.research-data', SOURCE, 5, rows.length]);
+  assert.deepEqual(fs.readdirSync(cwd), ['.research-data']);
+  assert.deepEqual(filesIn(store), ['candles/BTC/2025-09.f64', 'manifest.json', 'receipts/BTC/2025-09.jsonl']);
+  assert.deepEqual(readRows(candleFile(store, 'BTC', '2025-09')), rows);
+  // Its receipts are what storeCompleteness asks of an exchange store: the exchange's origin and an HTTP date.
+  const receipts = readReceipts(store, 'BTC', '2025-09');
+  assert.ok(receipts.every(receipt => receipt.url.startsWith('https://api.exchange.coinbase.com/products/BTC-USD/candles?') && Number.isFinite(Date.parse(receipt.httpDate))));
+  assert.deepEqual(storeCompleteness(store).problems.filter(problem => problem.asset === 'BTC' && problem.month === '2025-09').map(problem => problem.problem),
+    ['stored for 2025-09-29T00:00:00.000Z to 2025-09-30T00:00:00.000Z, which does not cover the whole month 2025-09-01T00:00:00.000Z to 2025-09-30T00:00:00.000Z']);
+});
+
+// The store's label follows the base URL, not what answered: a stub on the default base would be written down as
+// exchange data. Each call below runs in a child process whose working directory is a scratch directory, so that a
+// default store would appear there, and never in the repository, if the refusal were gone.
+test('a caller-supplied fetch never writes into the default store: without a directory of its own the call is refused before any request', async t => {
+  const cwd = tmp(t), refusal = 'a caller-supplied fetchImpl must come with a dir of its own, other than the default store .research-data: what a stub answers is never written there; refused';
+  const loopback = {baseUrl: 'http://127.0.0.1:9', pauseMs: 0};
+  const cases = [
+    [{}, refusal],                                        // the default base and no directory: what a verifier's stub did
+    [{dir: '.research-data'}, refusal],                   // the default store, named
+    [{dir: './.research-data/'}, refusal],
+    [{dir: path.join(cwd, '.research-data')}, refusal],
+    [loopback, refusal],                                  // whatever the base: the directory is what is protected
+    [{...loopback, dir: '.research-data'}, refusal],
+    [{to: '2025-10-01'}, 'to 2025-10-01 reaches the reserved range: no bucket starting at or after 2025-09-30T00:00:00.000Z is requested; refused, there is no override'],
+    [{...loopback, dir: 'own'}, 'fetched 0 rows into own'],     // a directory of its own: the stub is asked
+    [{...loopback, dir: path.join(cwd, 'own', 'second')}, `fetched 0 rows into ${path.join(cwd, 'own', 'second')}`]
+  ];
+  const script = `
+    import {fetchCandles} from ${JSON.stringify(pathToFileURL(CLI).href)};
+    const outcomes = [];
+    for (const options of JSON.parse(process.env.TEST_CASES)) {
+      let calls = 0;
+      const stub = async () => { calls++; return new Response('[]'); };
+      const outcome = await fetchCandles({from: '2025-09-29', to: '2025-09-30', assets: ['BTC'], log() {}, fetchImpl: stub, ...options})
+        .then(summary => 'fetched ' + summary.assets.BTC.rows + ' rows into ' + summary.dir, error => error.message);
+      outcomes.push([outcome, calls]);
+    }
+    console.log(JSON.stringify(outcomes));`;
+  const {stdout, stderr} = await new Promise(resolve => execFile(process.execPath, ['--input-type=module', '-e', script],
+    {cwd, env: {PATH: process.env.PATH, TEST_CASES: JSON.stringify(cases.map(([options]) => options))}}, (error, stdout, stderr) => resolve({stdout, stderr})));
+  assert.equal(stderr, '');
+  assert.deepEqual(JSON.parse(stdout), cases.map(([, outcome]) => [outcome, outcome.startsWith('fetched') ? 5 : 0]));
+  assert.deepEqual(filesIn(cwd), ['own/candles/BTC/2025-09.f64', 'own/manifest.json', 'own/receipts/BTC/2025-09.jsonl',
+    'own/second/candles/BTC/2025-09.f64', 'own/second/manifest.json', 'own/second/receipts/BTC/2025-09.jsonl']);   // and no .research-data
 });
