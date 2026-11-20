@@ -3,9 +3,10 @@
 > **Status: FIXED before any exploration data was retrieved; amended twice, also before any data.** The first
 > version is commit `5a82208` (2026-11-18). Amendment 1 (commit `6c9c9f2`) and Amendment 2, both 2026-11-19,
 > correct defects that independent verifiers found; every change is listed with its reason under "Amendments" at
-> the end. At each of these commits the only market data in the working tree is the bundled 30-hour sample: no
-> exploration candle has been fetched, so no rule in this file was written or changed with knowledge of the data
-> it will be applied to.
+> the end. Amendment 2's section on the tests was corrected on 2026-11-20 to match their simulated measurement,
+> still before any data. At each of these commits the only market data in the working tree is the bundled 30-hour
+> sample: no exploration candle has been fetched, so no rule in this file was written or changed with knowledge of
+> the data it will be applied to.
 > Authorization level: agent proposal (Claude Code), written in answer to J's request "make me money". This is
 > **exploration, not evidence**. It can nominate a candidate for a pre-registered held-out test; it cannot
 > establish that any rule makes money, and nothing here is frozen as an evaluation contract.
@@ -240,8 +241,9 @@ Read row by row:
 
 - **Independent windows** (the first five rows). The confirmation test and the buy-and-hold reading stay within
   about twice their level for every shape measured (at most 1.5% and 2.0%). The search-adjusted p-value is stricter
-  than it claims: about half its level for one family and about a fifth for all families pooled, and stricter
-  still when half the windows have no trade.
+  than it claims: over the four shapes together, about half its level for one family and about a quarter of it for
+  all families pooled (each pooled cell rests on 200 studies), and stricter still when half the windows have no
+  trade.
 - **Runs** (the next three rows: each window leans toward the one before it). Every test passes too often: the
   search-adjusted p-value about three times its level, the confirmation test and the buy-and-hold reading up to
   three and a half times theirs (1.3% to 3.5% at a 1% level).
@@ -267,14 +269,19 @@ Limits that no test on these windows can remove:
   long-run variance with four lags); none brought the confirmation test back to its level on 24 windows. So the
   limit is stated instead: **every label in this protocol assumes that a setting's windows are independent of one
   another, and for these two assets that cannot be assumed.** The autocorrelations of 24 windows barely show such
-  stretches: in scratch counts on the simulated regimes the average lag-1 autocorrelation was 0.06 to 0.08 and lags
-  2 to 4 were near zero. Lags 1 to 4, the two halves and the lowest third are reported so that the shape of a
-  nominee's returns can be seen; none of them is a test.
+  stretches. In a scratch count on the calibration's simulated nominees (also not part of
+  `research/calibration.json`), the average lag-1 autocorrelation under the two regimes rows was 0.06 to 0.08 and
+  lags 2 to 4 were between −0.03 and +0.04, against about −0.04 at every lag for independent windows, while one
+  estimate from 24 windows varies by about 0.2. Lags 1 to 4, the two halves and the lowest third are reported so
+  that the shape of a nominee's returns can be seen; none of them is a test.
 - **Low power.** The table below shows how often a real mean is found. "Not confirmed" does not show that a
   smaller positive mean is absent.
 
 **How often a real mean is found.** One setting has the true mean shown, in standard deviations of its own window
-returns; every other setting has none. The mean is added to the first row's own simulated studies and nominees, so
+returns; every other setting has none. In the last column the row's value is instead the true intercept, in
+standard deviations of the rule's return around its share of the comparison account (3% a window here). The rule's
+own window returns vary more (about 6.7%), so against them each intercept is a little under half the row's value:
+the 0.75 row is about a third of a standard deviation. The mean is added to the first row's own simulated studies and nominees, so
 the rows of this table are not independent of each other or of that row. The first column counts a pass whether or
 not the best score belongs to the setting that has the mean (in the 0.25 row none of the four passes did;
 `research/calibration.json` records both counts).
@@ -285,7 +292,7 @@ not the best score belongs to the setting that has the mean (in the 0.25 row non
 | 0.25 | 4.0% (4 of 100) | 8.9% (1,781 of 20,000) | 28% (5,515 of 20,000) | 8.9% (1,784 of 20,000) |
 | 0.5 | 19% (19 of 100) | 40% (8,024 of 20,000) | 71% (14,238 of 20,000) | 37% (7,353 of 20,000) |
 | 0.75 | 62% (62 of 100) | 80% (15,904 of 20,000) | 96% (19,115 of 20,000) | 74% (14,869 of 20,000) |
-| 1 | 96% (96 of 100) | 97% (19,383 of 20,000) | 100% (19,941 of 20,000) | 95% (18,952 of 20,000) |
+| 1 | 96% (96 of 100) | 97% (19,383 of 20,000) | 99.7% (19,941 of 20,000) | 95% (18,952 of 20,000) |
 <!-- calibration:power:end -->
 
 So with five nominees a mean of 0.75 standard deviations per 28-day window is confirmed about four times in five,
@@ -342,15 +349,17 @@ four rule-change definitions and the three confirmation labels are unchanged.
 
 **Amendment 2, 2026-11-19, before any exploration data was retrieved.** The code was brought to Amendment 1 and
 attacked again by independent verifier agents, on synthetic data only. The code held; the protocol's own
-description of its tests did not. Their findings, and what changed:
+description of its tests did not. Their findings, and what changed. The section on the tests and three rows of
+this table were rewritten on 2026-11-20 after the simulated measurement, and corrected again the same day after a
+verifier checked them against it; both times still before any data:
 
 | Change | Reason |
 |---|---|
 | Reading 7 says what an invalid window does: it keeps its place, pairs with nothing, and can still be drawn in a search resample | The earlier sentence ("dropped before any statistic is computed") could also be read as removing the window, and a verifier showed on synthetic prices that the two readings can nominate different settings. The reading already in the code is kept, on the principle that windows 56 days apart are not consecutive; no real window had been seen |
 | A month that holds no row is not complete, and "fetched from the exchange" is read from the receipts as well as the label | A verifier's store with 66 of 69 months empty ran as a complete store with "Deviations: none", and an edited source label passed although every receipt in the same store named another host |
 | New: "More than a share of buy-and-hold: yes or no" beside every label, and the comparison account's own row | "Confirmed" tests a mean above zero, which a long-only rule meets by being invested while the two assets rise (the last row of the first table). Before this amendment the regression was reported without a reading, leaving the interpretation to be made after the result was known |
-| New descriptive figures: autocorrelation at lags 1 to 4, the two halves, the lowest third (Readings 8 and 9) | A verifier measured that the lag-1 autocorrelation of 24 windows averages 0.06 to 0.08 under regimes that make the confirmation test pass five to thirteen times too often, so it cannot warn of them. Lags 2 to 4 cannot either (near zero on the same data); the new figures show the shape of a nominee's returns and are not tests |
-| The section on what the tests can do is rewritten. Its tables are written from a committed measurement, the search test is quoted at the width of families P, H and R (3,360) and pooled (13,200), regimes and a rising market have rows, and the power figures are a table | A verifier found the earlier table quoted the search test at 300 settings, a width no family has. Under runs its 10% became 16% at 3,360 settings and 18% at 13,200 in the committed measurement (17% and about 20% in the verifier's own run), while on independent windows the pooled test passed less than half as often as it claims. Five cells were off by more than their sampling error, "up to about twice too lenient" ignored regimes, and "roughly half a standard deviation" overstated what the tests can find |
+| New descriptive figures: autocorrelation at lags 1 to 4, the two halves, the lowest third (Readings 8 and 9) | A verifier measured that the lag-1 autocorrelation of 24 windows averages 0.06 to 0.08 under regimes that make the confirmation test pass five to thirteen times too often, so it cannot warn of them. Lags 2 to 4 cannot either (between −0.03 and +0.04 in a scratch count on the calibration's simulated nominees, against about −0.04 for independent windows); the new figures show the shape of a nominee's returns and are not tests |
+| The section on what the tests can do is rewritten. Its tables are written from a committed measurement, the search test is quoted at the width of families P, H and R (3,360) and pooled (13,200), regimes and a rising market have rows, and the power figures are a table | A verifier found the earlier table quoted the search test at 300 settings, a width no family has. Under runs its 10% became 16% at 3,360 settings and 18% at 13,200 in the committed measurement (17% and about 20% in the verifier's own run), while on independent windows the pooled test passed about a quarter as often as it claims. Five cells were off by more than their sampling error, "up to about twice too lenient" ignored regimes, and "roughly half a standard deviation" overstated what the tests can find |
 | "Dependence between windows" is a third stated limit, with the sentence that every label assumes independent windows | Same finding. The committed measurement shows that the runs rows already pass too often, not only the regimes. The verifier tried block means and a long-run variance in a scratch measurement and none restored the level, so the limit is disclosed and not patched |
 | The closing sentence about "not confirmed" is now conditional | The report printed it as fixed text in every run, also beside nominees labelled confirmed |
 

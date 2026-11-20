@@ -1,9 +1,5 @@
 # Research: can any setting of this rule make money after costs?
 
-> **Work in progress at this commit.** The protocol's second amendment is written. The code and the protocol's
-> two measured tables are still being brought to it, so some research tests fail here, and three things described
-> below are not in place yet: the buy-and-hold reading, `calibration.json` and `npm run test:research`.
-
 **Status: built, and checked on synthetic data only. The study has not been run. No result exists.**
 The environment it was built in cannot reach the exchange, so no exploration candle has been fetched. Nothing in
 this directory says that any rule makes or loses money on 2020 to 2025 prices.
@@ -18,9 +14,9 @@ Simulated cash only. Nothing here places, models or prepares a real order.
 | `fetch-candles.mjs`, `dataset.mjs` | Downloads Coinbase one-minute candles for BTC-USD and LINK-USD into `.research-data/` (ignored by git), keeping a receipt for every response. Refuses anything from `2025-09-30T00:00Z` on, with no override: that range is reserved for a held-out test |
 | `fastsim.mjs`, `engine-run.mjs`, `holdthrough-oracle.mjs` | A fast simulator for the search, and the runners that replay every nominee through the app's own `engine.js` |
 | `stats.mjs`, `calibration.mjs`, `calibration.json` | The protocol's statistics, and the measurement of how often each test passes when there is nothing to find (the tables in the protocol are written from `calibration.json`) |
-| `study.mjs`, `study-worker.mjs`, `settings.mjs`, `report.mjs` | The study command. It writes `research/RESULTS.md` and `research/results/exploration.json` |
+| `study.mjs`, `study-worker.mjs`, `settings.mjs`, `windows.mjs`, `report.mjs` | The study command. It writes `research/RESULTS.md` and `research/results/exploration.json` |
 | `sample-cost-hurdle.mjs` | A descriptive look at the bundled sample only (below) |
-| `*.test.mjs` | The harness's own tests: `npm run test:research` |
+| `*.test.mjs`, `synthetic.mjs`, `test-store.mjs` | The harness's own tests (`npm run test:research`, also run by `scripts/verify.sh`), with a synthetic market and an honest candle store written through the fetcher from answers a test supplies. Tests only |
 
 ## Run it
 
@@ -28,15 +24,21 @@ Node 22 or later, from the repository root, on a machine that can reach `api.exc
 
 ```sh
 node research/fetch-candles.mjs    # once; about 20,300 requests. Stop and restart at will: finished months are kept
-node research/study.mjs            # about two minutes on four cores
+node research/study.mjs            # a minute or two on four cores
 ```
 
-- The download is paced at four requests a second at most. Expect two to three hours. That figure is an estimate
-  from the request count: the fetcher has only ever talked to a local test server.
-- Behind a proxy, Node's built-in `fetch` needs `NODE_USE_ENV_PROXY=1`.
-- `study.mjs` refuses to run unless every month from 2020-01 to 2025-09 is present for both assets and the code is
-  committed. Each refusal names the option that overrides it, and an override is printed as the first line of the
-  results.
+- Each asset is fetched as a stream of its own, with at least 250 ms between that stream's requests: 10,150
+  requests per asset, both streams at once. Expect roughly one to two hours, depending on how fast the exchange
+  answers. That figure is an estimate from the request count: the fetcher has only ever talked to local test
+  servers.
+- Behind a proxy, Node's built-in `fetch` needs `NODE_USE_ENV_PROXY=1`, and a proxy that inspects TLS needs its
+  certificate authority as well, for example `NODE_EXTRA_CA_CERTS=/path/to/proxy-ca.pem`. Never turn TLS
+  verification off for this.
+- `study.mjs` refuses to run unless every month from 2020-01 to 2025-09 is present for both assets, every month's
+  receipts vouch for it, and the code is committed. Each problem it lists ends with what repairs it, each refusal
+  names the option that overrides it, and an override is printed as the first line of the results. Keep the store
+  directory (`.research-data`) for the candle store alone: a file in it that the fetcher did not write is listed as
+  a problem.
 - The study looks at the confirmation windows once. A second run does not replace an earlier record unless
   `--overwrite` is given, and then the report says so.
 - Read `RESULTS.md` from the top. It says what was run, lists every deviation, and labels each nominee as
@@ -91,8 +93,13 @@ Every number below comes from synthetic prices or the bundled sample.
 - The fetcher's range guard held under attack: odd dates, look-alike hosts, flags, environment variables,
   redirects.
 - Independent verification found real defects, all before any data: a selection test that passed far too often
-  with nothing to find, a table describing the tests that was too optimistic, and a study that accepted an
-  incomplete candle store. Each is recorded with its fix under "Amendments" in the protocol.
+  with nothing to find, a description of the tests that was too optimistic, and a study that accepted an
+  incomplete candle store. Each protocol change is recorded with its reason under "Amendments" in the protocol.
+- Four rounds of independent verifier agents attacked the harness. The last, on the statistics, the data store and
+  the study, found nothing serious; its smaller findings (wording, and tests that let some one-line breakages
+  through) were fixed, and each new test was checked to fail on the breakage it targets.
+- `npm run test:research` runs the harness's tests in about a minute on four cores; `scripts/verify.sh` runs them
+  with the rest of the repository's checks.
 
-What was not checked: the live exchange (rate limits, whether every 2020 to 2025 candle passes validation), and
-anything about real prices.
+What was not checked: the live exchange (rate limits, its Date header, whether every 2020 to 2025 candle passes
+validation), and anything about real prices.

@@ -1,30 +1,34 @@
 // The study runner (research/study.mjs) on a scaled-down protocol and SYNTHETIC markets: every step of
-// research/PROTOCOL.md, as amended, is driven before any real exploration data exists. Nothing here is market
-// data and no number in this file says anything about real prices. Simulated cash only.
+// research/PROTOCOL.md, as amended twice, is driven before any real exploration data exists. Candle stores are
+// written by research/fetch-candles.mjs itself through research/test-store.mjs, answered by a stub; nothing is
+// fetched. Nothing here is market data and no number in this file says anything about real prices. Simulated cash
+// only.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync, spawnSync} from 'node:child_process';
 import {once} from 'node:events';
-import {appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {Worker} from 'node:worker_threads';
 import {createAccount} from '../engine.js';
-import {MINUTE, DAY, ASSETS, PROTOCOL, protocolWindows, prepareWindow} from './windows.mjs';
+import {MINUTE, DAY, ASSETS, PROTOCOL, protocolWindows, prepareWindow, lowerBound} from './windows.mjs';
 import {simulate, simulateGrid} from './fastsim.mjs';
-import {runEngine} from './engine-run.mjs';
+import {runEngine, ENGINE_FILE} from './engine-run.mjs';
 import {loadHoldThroughEngine} from './holdthrough-oracle.mjs';
 import {syntheticMarket} from './synthetic.mjs';
-import {mean, sampleSd, tStat, tTestGreaterP, score, lag1Autocorrelation, autocorrelationFactor, skewness, searchAdjustedP,
-  confirmationP, ols, signTestPValue, mulberry32} from './stats.mjs';
-import {FORMAT as STORE_FORMAT, SOURCE, EXPLORATION_FROM, RESERVED_FROM, explorationMonths, manifestBounds, manifestPath,
-  monthKey, monthPaths, monthRange, sha256Hex, storeCompleteness} from './dataset.mjs';
+import {mean, sampleSd, tStat, tTestGreaterP, score, lag1Autocorrelation, autocorrelationFactor, autocorrelationAt, skewness,
+  searchAdjustedP, confirmationP, buyAndHoldReading, ols, signTestPValue, mulberry32} from './stats.mjs';
+import {SOURCE, LOOPBACK_SOURCE, EXPLORATION_FROM, RESERVED_FROM, explorationMonths, manifestPath, monthPaths,
+  monthRange, sha256Hex, storeCompleteness} from './dataset.mjs';
+import {writeTestStore} from './test-store.mjs';
 import {FAMILIES, AXES, familySettings, allSettings, neighbours, DEFAULT_SETTING, COSTS} from './settings.mjs';
 import {runStudy, summaryText, prepareWindows, runDesignGrid, scoreRows, scoreDesign, nominateFamily, confirmationLabel,
-  confirmNominees, compareExact, exactCheck, costHurdle, codeState, READINGS, FURTHER_READINGS, MODULES, REFERENCE_ENGINE,
-  REFERENCES, referenceFor, feedsHistory} from './study.mjs';
-import {renderResults, pValue, LIMITS, TEST_LIMITS, SECTIONS} from './report.mjs';
+  moreThanAShareOfBuyAndHold, readingConditions, heldConditions, descriptiveFigures, confirmNominees, comparisonAccountRow, compareExact, exactCheck, costHurdle,
+  codeState, READINGS, FURTHER_READINGS, MODULES, REFERENCE_ENGINE, REFERENCES, referenceFor, feedsHistory} from './study.mjs';
+import {renderResults, pValue, labelWithReading, calibrationNote, OUTCOME_BOUNDS, TESTS_SECTION, INDEPENDENCE, TEST_LIMITS,
+  RISING_MARKET, SECTIONS} from './report.mjs';
 import {gridTask, engineTask} from './study-worker.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -37,6 +41,13 @@ const LABELS = ['confirmed at default costs', 'confirmed and cost-robust', 'not 
 const plain = value => JSON.parse(JSON.stringify(value));   // what a record holds after its JSON round trip
 // The two words the repository reserves for claims it does not make, and a third the report must not use.
 const RESERVED = new RegExp(`\\b(${['ed' + 'ge', 'al' + 'pha', 'guar' + 'anteed'].join('|')})\\b`, 'i');
+// A report quotes the protocol's "What a result would and would not establish" word for word, and that text holds
+// one reserved word inside its own negation ("not a trading ..."). Everything else in a report is held to RESERVED.
+const unquoted = report => OUTCOME_BOUNDS.reduce((text, quoted) => text.split(`> ${quoted}`).join(''), report);
+// Every printed label, and what follows it: the buy-and-hold reading must stand right beside it (PROTOCOL.md,
+// Confirmation: "Stated beside the label of every nominee, wherever the label is printed").
+const PRINTED_LABEL = /(CONFIRMED AT DEFAULT COSTS|CONFIRMED AND COST-ROBUST|NOT CONFIRMED)(.{0,40})/g;
+const labelsAlone = text => [...text.matchAll(PRINTED_LABEL)].filter(([, , after]) => !/^; more than a share of buy-and-hold: (yes|no)\b/.test(after));
 
 // ---------------------------------------------------------------------------------------------------------------
 // The scaled-down protocol: 20 windows of 2 days, 10 design + 10 confirmation, 920 of the 13,200 settings, and
@@ -70,6 +81,14 @@ function scaledMarket(seed, regimeDrift) {
 const TREND = scaledMarket(1, 0.0002);
 const dryRun = (workers, dir = null, market = TREND) => runStudy({market, protocol: SCALED, settings: SEARCHED, resamples: 300,
   workers, out: dir, ...(dir ? {report: join(dir, 'RESULTS.md')} : {})});
+// A rising market with nothing to time: both assets drift up 0.004% a minute (about 12% a two-day window) without
+// trends, so a long-only rule gains by being invested and by nothing else (PROTOCOL.md, the last row of the first
+// table: "No timing value: 40% invested in a rising market").
+function risingMarket(seed) {
+  const quiet = {missing: 0.004, gapRate: 0.0005, longGapRate: 0, drift: 0.00004, regimeDrift: 0};
+  return syntheticMarket({seed, start: FROM + MINUTE, minutes: SCALED.windowCount * SCALED.windowDays * 1440 - 1, BTC: quiet,
+    LINK: {...quiet, missing: 0.008}});
+}
 
 // The dry run, four times: twice on two workers (written to disk), once in this thread, once on four workers.
 const started = performance.now();
@@ -448,6 +467,227 @@ test('confirmation labels on hand-built return vectors: the larger of two p-valu
   assert.throws(() => confirmationLabel({r, rFee10: r, k: 6}), /number of nominees/);
 });
 
+test('"more than a share of buy-and-hold" on hand-built returns: yes, and no for each of its reasons', () => {
+  // Amendment 2: "Fit r = intercept + slope × b by least squares over the nominee's valid confirmation windows ...
+  // Yes needs at least 20 valid windows, intercept > 0 and that p-value < 0.05 / k; anything else is no." Here b is
+  // 24 comparison returns and r = c + 0.4 b + e, with e a fixed pattern of twelve, rounded to 0.001: the fitted
+  // slope is 0.377 whatever c is, and the intercept is c + 0.04.
+  const b = [3.1, -2.4, 5.6, 0.8, -4.2, 1.9, 6.3, -1.1, 2.7, -3.5, 4.4, 0.2, -0.9, 3.8, -2.2, 1.5, 5.1, -3.9, 0.6, 2.9, -1.7, 4.8, -0.4, 1.2];
+  const e = [1.2, -1, 0.4, -0.8, 0.2, 0.6, -1.2, 1, -0.4, 0, 0.8, -0.6];
+  const series = (c, slope = 0.4, base = b) => base.map((x, w) => Math.round((c + slope * x + e[w % 12]) * 1000) / 1000);
+  const reading = (r, k, more = {}) => moreThanAShareOfBuyAndHold({r, b, k, ...more});
+  const label = (r, k) => confirmationLabel({r, rFee10: r, k}).label;
+
+  // Yes: c = 1, intercept 1.04, fit p 2.5e-6, below every bar from 0.05 / 1 to 0.05 / 5.
+  const strong = series(1), yes = reading(strong, 5), parts = buyAndHoldReading(strong, b);
+  assert.deepEqual([1, 2, 3, 4, 5].map(k => reading(strong, k).reading), ['yes', 'yes', 'yes', 'yes', 'yes']);
+  assert.ok(Math.abs(yes.intercept - 1.0405108) < 1e-6 && Math.abs(yes.slope - 0.3767374) < 1e-6 && yes.p < 3e-6, JSON.stringify(yes));
+  // Its numbers are research/stats.mjs buyAndHoldReading's, the score of the adjusted series under the name T.
+  const {adjusted: {score: T, ...adjusted}, ...fit} = parts;
+  assert.deepEqual(yes, {reading: 'yes', conditions: {enoughWindows: true, positiveIntercept: true, pBelowThreshold: true}, threshold: 0.01,
+    minValidWindows: 20, ...fit, adjusted: {...adjusted, T}});
+
+  // No because of the bar: c = 0.35, intercept 0.39 above 0, fit p 0.01757 (the larger: the adjusted series' p is
+  // 0.0119). Yes with one or two nominees, no with three to five. With five, the label itself is "confirmed": the
+  // confirmation p-value of r is 0.0065, below 0.01. The label and the reading answer different questions.
+  const middling = series(0.35), atBar = reading(middling, 5);
+  assert.ok(Math.abs(atBar.pFit - 0.0175715) < 1e-6 && atBar.adjusted.p === 0.0119 && atBar.p === atBar.pFit && atBar.intercept > 0, JSON.stringify(atBar));
+  assert.deepEqual([1, 2, 3, 4, 5].map(k => reading(middling, k).reading), ['yes', 'yes', 'no', 'no', 'no']);
+  assert.deepEqual(atBar.conditions, {enoughWindows: true, positiveIntercept: true, pBelowThreshold: false});
+  assert.deepEqual([label(middling, 5), Math.abs(confirmationP(middling).p - 0.0065372) < 1e-6], ['confirmed and cost-robust', true]);
+  // The larger of the two p-values: at c = 0.6 the adjusted series' resample (0.0007) is above the fit's 0.00065.
+  const close = reading(series(0.6), 5);
+  assert.ok(close.pFit < close.adjusted.p && close.p === close.adjusted.p && close.p === 0.0007, JSON.stringify(close));
+  // And it can decide the reading: with the noise in runs (lag-1 autocorrelation 0.19, so the score of r − slope × b
+  // is shrunk), at c = 0.6 the fit alone (p 0.0088) would pass four nominees' bar of 0.0125; the adjusted series'
+  // confirmation p-value, 0.0162, does not. No.
+  const runs = [1.2, 1, 0.8, -0.8, -1, -1.2, 1.1, 0.9, -0.9, -1.1, 0.5, -0.5];
+  const inRuns = b.map((x, w) => Math.round((0.6 + 0.4 * x + runs[w % 12]) * 1000) / 1000), decided = reading(inRuns, 4);
+  assert.ok(decided.pFit < 0.0125 && decided.adjusted.p > 0.0125 && decided.p === decided.adjusted.p && decided.adjusted.lag1 > 0.19, JSON.stringify(decided));
+  assert.deepEqual([decided.reading, decided.conditions], ['no', {enoughWindows: true, positiveIntercept: true, pBelowThreshold: false}]);
+
+  // No because the intercept is not above 0: a market that rose (b + 3 in every window) and r = -0.5 + 0.9 b + e.
+  // The label is confirmed with five nominees (confirmation p 8.5e-6): all of that mean is time spent invested.
+  const rose = b.map(x => x + 3), invested = series(-0.5, 0.9, rose), held = moreThanAShareOfBuyAndHold({r: invested, b: rose, k: 5});
+  assert.equal(label(invested, 5), 'confirmed and cost-robust');
+  assert.ok(held.intercept < -0.38 && Math.abs(held.slope - 0.8767) < 1e-4 && held.p > 0.9, JSON.stringify(held));
+  assert.deepEqual([held.reading, held.conditions], ['no', {enoughWindows: true, positiveIntercept: false, pBelowThreshold: false}]);
+
+  // No for too few windows: the strong series with five windows invalid has 19, and its p-value (0.0004) would pass.
+  // A scaled-down protocol passes its own minimum.
+  const nineteen = strong.map((x, w) => (w % 5 === 2 ? NaN : x)), few = reading(nineteen, 5);
+  assert.deepEqual([few.n, few.p < 0.001, few.reading, few.conditions], [19, true, 'no', {enoughWindows: false, positiveIntercept: true, pBelowThreshold: true}]);
+  assert.equal(reading(nineteen, 5, {minValidWindows: 19}).reading, 'yes');
+  // No line can be fitted to a comparison account without spread: the reading is no, p 1.
+  const flat = moreThanAShareOfBuyAndHold({r: strong, b: Array(24).fill(2), k: 1});
+  assert.deepEqual([flat.reading, flat.p, flat.intercept, flat.conditions.positiveIntercept], ['no', 1, NaN, false]);
+  assert.throws(() => reading(strong, 0), /number of nominees/);
+  assert.throws(() => reading(strong, 6), /number of nominees/);
+  // What is printed beside a label, in the summary, RESULTS.md and exploration.json alike.
+  assert.equal(labelWithReading({label: 'confirmed at default costs', moreThanAShareOfBuyAndHold: 'no'}),
+    'CONFIRMED AT DEFAULT COSTS; more than a share of buy-and-hold: no');
+  assert.throws(() => labelWithReading({label: 'not confirmed'}), /needs its buy-and-hold reading/);
+});
+
+test('the bars of the reading and of the comparison row are strict, and their minimum of windows is inclusive', () => {
+  // study3 finding 2: no hand-built case sat exactly on these edges, so "<=" for "<" (or ">=" for ">") survived. At
+  // full size they can be met: with 10,000 resamples a resample p-value can equal 0.05 / k exactly for k = 1, 2, 4
+  // and 5, and a confirmation set that loses four windows to the floor has exactly 20.
+  const at = {threshold: 0.05 / 5, minValidWindows: 20};
+  assert.deepEqual(readingConditions({n: 20, intercept: 0.4, p: 0.01}, at), {enoughWindows: true, positiveIntercept: true, pBelowThreshold: false});
+  assert.deepEqual(readingConditions({n: 20, intercept: 0, p: 0.001}, at), {enoughWindows: true, positiveIntercept: false, pBelowThreshold: true});
+  assert.deepEqual(readingConditions({n: 20, intercept: 1e-12, p: 0.00999}, at), {enoughWindows: true, positiveIntercept: true, pBelowThreshold: true});
+  assert.deepEqual(readingConditions({n: 19, intercept: 0.4, p: 0.001}, at), {enoughWindows: false, positiveIntercept: true, pBelowThreshold: true});
+  assert.deepEqual(readingConditions({n: 20, intercept: NaN, p: NaN}, at), {enoughWindows: true, positiveIntercept: false, pBelowThreshold: false});
+  assert.deepEqual(readingConditions({n: 24, intercept: 2, p: 0.0125}, {threshold: 0.05 / 4, minValidWindows: 20}).pBelowThreshold, false);
+  // "Did simply holding pass?": the conditions of "confirmed at default costs" with the nominees' bar, or no bar.
+  const five = {k: 5, minValidWindows: 20};
+  assert.deepEqual(heldConditions({n: 20, mean: 0.3, p: 0.01}, five), {enoughWindows: true, positiveMean: true, pBelowThreshold: false});
+  assert.deepEqual(heldConditions({n: 20, mean: 0, p: 0.001}, five), {enoughWindows: true, positiveMean: false, pBelowThreshold: true});
+  assert.deepEqual(heldConditions({n: 20, mean: 0.3, p: 0.00999}, five), {enoughWindows: true, positiveMean: true, pBelowThreshold: true});
+  assert.deepEqual(heldConditions({n: 19, mean: 0.3, p: 0.001}, five), {enoughWindows: false, positiveMean: true, pBelowThreshold: true});
+  assert.deepEqual(heldConditions({n: 20, mean: 0.3, p: 0.025}, {k: 2, minValidWindows: 20}).pBelowThreshold, false);
+  assert.deepEqual(heldConditions({n: 20, mean: 0.3, p: 0.001}, {k: 0, minValidWindows: 20}), {enoughWindows: true, positiveMean: true, pBelowThreshold: null});
+  // And these are the rules the two calculations apply.
+  const b = Array.from({length: 24}, (unused, w) => [3.1, -2.4, 5.6, 0.8, -4.2, 1.9][w % 6] + w / 10);
+  const r = b.map((x, w) => 0.6 + 0.4 * x + [1.2, -1, 0.4, -0.8, 0.2, 0.6, -1.2, 1, -0.4, 0, 0.8, -0.6][w % 12]);
+  for (const k of [1, 3, 5]) {
+    const h = moreThanAShareOfBuyAndHold({r, b, k, resamples: 200});
+    assert.deepEqual(h.conditions, readingConditions(h, {threshold: 0.05 / k, minValidWindows: 20}));
+  }
+});
+
+test('a reading of no for too few windows, or with no fitted line, is not given the protocol\'s words for a fit that was read', () => {
+  // study3 finding 4: a nominee whose fit had intercept +19.6% and p below 0.0001 read no only for lack of windows,
+  // and the report then quoted "cannot be told apart from holding the fraction slope" beside that fit.
+  const NO_MEANS = '"*No* means the nominee\'s return on these windows cannot be told apart';
+  const bullet = (record, id) => renderResults(record).split('\n').find(line => line.startsWith(`- **${id}**`));
+  const tooFew = structuredClone(R), c = tooFew.nominees[0].confirmation, h = c.buyAndHold;
+  Object.assign(h, {reading: 'no', n: h.minValidWindows - 1, intercept: 19.6, p: 0.00005,
+    conditions: {enoughWindows: false, positiveIntercept: true, pBelowThreshold: true}});
+  c.moreThanAShareOfBuyAndHold = 'no';
+  const few = bullet(tooFew, tooFew.nominees[0].id);
+  assert.ok(few.includes(`its buy-and-hold reading is no, because it has ${h.n} valid windows and needs at least ${h.minValidWindows}: ` +
+    'too few valid windows to read, and the protocol counts that as no, whatever the fit on them shows.'), few);
+  assert.ok(!few.includes(NO_MEANS) && !few.includes('Here the slope is'), few);
+  // No line can be fitted (a comparison account without spread): nothing was read either. The report is rendered
+  // from the record after its JSON round trip, where the fit's NaN is null.
+  Object.assign(h, {n: h.minValidWindows, intercept: null, slope: null, p: 1, conditions: {enoughWindows: true, positiveIntercept: false, pBelowThreshold: false}});
+  const flat = bullet(tooFew, tooFew.nominees[0].id);
+  assert.ok(flat.includes('because no line can be fitted, and the reading\'s p-value 1.0000 is not below') &&
+    flat.includes(': with no fitted line there is nothing to read, and the protocol counts that as no.') && !flat.includes(NO_MEANS), flat);
+  // A fit that was read and is no keeps the protocol's words, with its slope.
+  Object.assign(h, {intercept: -0.4, slope: 0.877, p: 0.93, conditions: {enoughWindows: true, positiveIntercept: false, pBelowThreshold: false}});
+  const read = bullet(tooFew, tooFew.nominees[0].id);
+  assert.ok(read.includes(`In the protocol's words, ${NO_MEANS}`) && read.includes('Here the slope is 0.877.'), read);
+});
+
+test('descriptive figures (Reading 9) on hand-built returns: lags 1 to 4, the halves, the lowest third with a refused window and ties', () => {
+  // The protocol's own 24 confirmation windows, 50 to 73. Windows 53 and 65 are refused for this nominee: r is NaN
+  // there and b is not (the comparison account is defined on every window above the floor, Reading 8).
+  const windows = protocolWindows(PROTOCOL).filter(w => w.set === 'confirmation'), _ = NaN;
+  assert.deepEqual([windows.length, windows[0].index, windows.at(-1).index], [24, 50, 73]);
+  const r = [1.5, -0.5, 2, _, 0.25, 1, -1.5, 3, 0.5, -0.25, 1.75, 2.5, -1, 0.75, 1.25, _, 2.25, -0.75, 0.5, 1, -2, 3.5, 0.25, 1.5];
+  // The lowest b of all is at window 53, which is refused. Among valid windows the seven lowest (floor(22 / 3) = 7)
+  // are 56 (-6), 62 (-5), 51 and 67 (-4, a tie), 70 (-3), and then -2 is held by 54, 58 and 72: ties go to the earlier
+  // window, so 54 and 58 are in and 72 is out.
+  const b = [1, -4, 2, -9, -2, 3, -6, 0.5, -2, 4, 1.5, 2.5, -5, 3.5, 1, -8, 2, -4, 5, 0, -3, 6, -2, 1];
+  const figures = descriptiveFigures(windows, r, b);
+  assert.deepEqual(figures.autocorrelation, [1, 2, 3, 4].map(lag => autocorrelationAt(r, lag)));
+  // Reading 7: the refused windows keep their places, so 52 and 54 are not a pair at lag 1 (nor 64 and 66).
+  const compact = r.filter(x => x === x);
+  assert.notEqual(figures.autocorrelation[0], autocorrelationAt(compact, 1));
+  assert.ok(figures.autocorrelation.every(Number.isFinite) && figures.autocorrelation.some(a => a < 0), 'reported as computed, not floored');
+  // "The halves of the confirmation set are windows 50 to 61 and 62 to 73", each with its number of valid windows.
+  const valid = values => values.filter(x => x === x);
+  assert.deepEqual(figures.halves, [{windows: [50, 61], n: 11, mean: mean(valid(r.slice(0, 12)))}, {windows: [62, 73], n: 11, mean: mean(valid(r.slice(12)))}]);
+  const lowest = [56, 62, 51, 67, 70, 54, 58];
+  assert.deepEqual(figures.lowestThird, {n: 7, windows: lowest, mean: mean(lowest.map(index => r[index - 50])),
+    meanComparison: mean(lowest.map(index => b[index - 50]))});
+  // A list of odd length (a scaled-down run) gives its middle window to the first half.
+  const odd = descriptiveFigures(windows.slice(0, 7), r.slice(0, 7), b.slice(0, 7));
+  assert.deepEqual(odd.halves.map(h => [h.windows, h.n]), [[[50, 53], 3], [[54, 56], 3]]);
+  assert.deepEqual([odd.lowestThird.n, odd.lowestThird.windows], [2, [56, 51]]);
+  // floor(n / 3) is rounded down: eight valid windows give two, not three.
+  const eight = descriptiveFigures(windows.slice(0, 9), r.slice(0, 9), b.slice(0, 9));
+  assert.deepEqual([eight.lowestThird.n, eight.lowestThird.windows], [2, [56, 51]]);
+  // A valid window without the comparison account's b is a defect of the caller.
+  assert.throws(() => descriptiveFigures(windows, r, b.map((x, w) => (w === 4 ? NaN : x))), /Window 54: r without the comparison account's b/);
+});
+
+test('the comparison account\'s own row (Reading 8): every confirmation window above the floor, the nominees\' k and bar, or no bar', () => {
+  const prepared = CONFIRMATION.map(w => prepareWindow(TREND, w, SCALED)), base = {market: TREND, windows: CONFIRMATION, prepared, protocol: SCALED, resamples: 300};
+  const row = comparisonAccountRow({...base, k: 4});
+  // Window 14 is below the coverage floor; every other confirmation window has b, whichever setting ran beside it.
+  assert.deepEqual(row.perWindow.map(w => w.index), [10, 11, 12, 13, 15, 16, 17, 18, 19]);
+  for (const [i, w] of CONFIRMATION.entries()) {
+    const held = row.perWindow.find(entry => entry.index === w.index);
+    if (!held) continue;
+    for (const setting of [DEFAULT_SETTING, byId['X-h15-l180-b40-s0']])
+      assert.deepEqual([COSTS.default, COSTS.fee10, COSTS.fee40].map(costs => simulate(TREND, prepared[i], setting, costs).buyHoldReturnPct),
+        [held.b, held.bFee10, held.bFee40], `window ${w.index}`);
+  }
+  // The confirmation calculation on b aligned to the confirmation windows, at each cost level.
+  const aligned = key => CONFIRMATION.map(w => row.perWindow.find(entry => entry.index === w.index)?.[key] ?? NaN);
+  for (const [level, key] of [[row, 'b'], [row.fee10, 'bFee10'], [row.fee40, 'bFee40']]) {
+    const {score: T, ...test_} = confirmationP(aligned(key), {resamples: 300});
+    assert.deepEqual({...level, fee10: null, fee40: null, perWindow: null, k: null, threshold: null, minValidWindows: null, passed: null, conditions: null,
+      sharePositive: null, worst: null}, {...test_, T, fee10: null, fee40: null, perWindow: null, k: null, threshold: null, minValidWindows: null,
+      passed: null, conditions: null, sharePositive: null, worst: null});
+    const values = row.perWindow.map(entry => entry[key]);
+    assert.deepEqual(level.worst, {index: row.perWindow[values.indexOf(Math.min(...values))].index, b: Math.min(...values)});
+  }
+  // "Did simply holding pass?": the conditions of "confirmed at default costs", with the nominees' k.
+  assert.deepEqual([row.k, row.threshold, row.minValidWindows, row.n], [4, 0.0125, 8, 9]);
+  assert.deepEqual(row.conditions, {enoughWindows: true, positiveMean: row.mean > 0, pBelowThreshold: row.p < 0.0125});
+  assert.equal(row.passed, row.conditions.enoughWindows && row.conditions.positiveMean && row.conditions.pBelowThreshold);
+  assert.equal(row.passed, false, 'this market drifts in trends both ways: holding it does not pass');
+  // With no nominee there is no k and no bar: the same numbers, standing alone.
+  const alone = comparisonAccountRow({...base, k: 0});
+  assert.deepEqual([alone.k, alone.threshold, alone.passed, alone.conditions.pBelowThreshold], [0, null, null, null]);
+  assert.deepEqual({...alone, k: 4, threshold: 0.0125, passed: row.passed, conditions: row.conditions}, row);
+  // On a rising market simply holding passes the same test, with five nominees' bar of 0.01.
+  const rising = risingMarket(1), risen = comparisonAccountRow({market: rising, windows: CONFIRMATION, prepared: CONFIRMATION.map(w => prepareWindow(rising, w, SCALED)),
+    protocol: SCALED, resamples: 300, k: 5});
+  assert.deepEqual([risen.n, risen.passed, risen.mean > 5, risen.p < 0.01], [10, true, true, true]);
+  assert.throws(() => comparisonAccountRow({...base, k: 6}), /number of nominees, 0 to 5/);
+  assert.throws(() => comparisonAccountRow({...base, windows: DESIGN, prepared: DESIGN.map(w => prepareWindow(TREND, w, SCALED)), k: 1}), /not a confirmation window/);
+  // In the dry run's record, the row with the dry run's four nominees.
+  assert.deepEqual(R.comparisonAccount, plain(row));
+});
+
+test('Readings 7 and 8 on the confirmation side: an invalid window keeps its place; the reading uses the nominee\'s windows, the row every one above the floor', () => {
+  // Ten hours before window 16 are taken out of both assets: window 15 falls below the coverage floor (invalid for
+  // every setting, like window 14), and window 16 keeps its coverage but no lookback setting has causal warmup there
+  // (refused for that setting). A long-lookback setting is never refused (Reading 1).
+  const cut = Object.fromEntries(ASSETS.map(asset => [asset, without(TREND[asset], WINDOWS[16].start - 600 * MINUTE, WINDOWS[16].start - MINUTE)]));
+  const prepared = CONFIRMATION.map(w => prepareWindow(cut, w, SCALED));
+  assert.deepEqual(prepared.map(p => p.valid), CONFIRMATION.map(w => ![14, 15].includes(w.index)));
+  const nominees = [byId['P-h60-l10-b160-s300'], byId['L-h60-span240-b0-s0-hold1']];
+  const [lookback, long] = confirmNominees({market: cut, windows: CONFIRMATION, prepared, nominees, protocol: SCALED, resamples: 300});
+  assert.deepEqual(lookback.invalidForSetting, [{index: 16, reason: 'insufficient warmup'}]);
+  assert.deepEqual([lookback.perWindow.map(w => w.index), long.perWindow.map(w => w.index), long.invalidForSetting],
+    [[10, 11, 12, 13, 17, 18, 19], [10, 11, 12, 13, 16, 17, 18, 19], []]);
+  // "It enters none of that setting's counts, means, standard deviations or scores, and it keeps its place in the
+  // window order": the statistics are those of the returns aligned to the ten windows with NaN in place, so 13 and
+  // 17 are not an adjacent pair. Taking the three windows out of the list is the other reading, and gives another
+  // autocorrelation.
+  const aligned = (c, key) => CONFIRMATION.map(w => c.perWindow.find(row => row.index === w.index)?.[key] ?? NaN);
+  for (const c of [lookback, long]) {
+    const r = aligned(c, 'r'), {score: T, ...test_} = confirmationP(r, {resamples: 300});
+    assert.deepEqual([c.n, c.mean, c.sd, c.lag1, c.T, c.pT, c.pResample, c.p], [test_.n, test_.mean, test_.sd, test_.lag1, T, test_.pT, test_.pResample, test_.p]);
+    assert.notEqual(c.lag1, lag1Autocorrelation(r.filter(x => x === x)));
+    assert.deepEqual(c.autocorrelation, [1, 2, 3, 4].map(lag => autocorrelationAt(r, lag)));
+    // Reading 8: "The buy-and-hold reading uses the windows valid for the nominee".
+    assert.equal(c.buyAndHold.n, c.n);
+  }
+  assert.deepEqual([lookback.n, long.n, lookback.halves.map(h => h.n)], [7, 8, [4, 3]]);
+  // "... the comparison account's own row uses every confirmation window above the floor and the same k": window 16
+  // is in it, although the lookback nominee was refused there.
+  const row = comparisonAccountRow({market: cut, windows: CONFIRMATION, prepared, protocol: SCALED, resamples: 300, k: 2});
+  assert.deepEqual([row.perWindow.map(w => w.index), row.n, row.k, row.threshold], [[10, 11, 12, 13, 16, 17, 18, 19], 8, 2, 0.025]);
+});
+
 test('the design grid refuses anything that is not a design window of the protocol', async () => {
   const run = designWindows => runDesignGrid({market: TREND, designWindows, settings: SEARCHED.slice(0, 3), protocol: SCALED, workers: 0});
   await assert.rejects(run([CONFIRMATION[0]]), /design windows only: window 10 \(confirmation\) is refused/);
@@ -506,7 +746,8 @@ test('an error inside a worker thread stops the grid instead of hanging it; runS
 
   // When a task fails, the pool stops every worker, but none that is still loading its modules: Node 22 aborts
   // the whole process (a V8 check in AsyncModuleExecutionFulfilled, signal SIGTRAP) when a thread is terminated
-  // while a module with a top-level await is being evaluated, and research/engine-run.mjs is one. Measured on the
+  // while a module with a top-level await is being evaluated, and research/engine-run.mjs was one until it imported
+  // the engine statically (the next test checks that no module of a study worker has one now). Measured on the
   // pool as it was: with 16 workers and a task that fails at once, the process died within 1 to 34 attempts in
   // 6 runs of 6. Here every terminate() is watched instead: it must come after the worker's first message (its
   // "loaded" notice), or after the worker has gone. An early one is held back and counted, so a pool that does it
@@ -548,6 +789,63 @@ test('an error inside a worker thread stops the grid instead of hanging it; runS
   assert.deepEqual(notice, [{ready: true}]);
 });
 
+test('research/engine-run.mjs imports engine.js statically, the file ENGINE_FILE names, and a study worker can be terminated while it loads', async () => {
+  // The module the static import loads is the file ENGINE_FILE names and the study hashes. In the source: the one
+  // import of engine.js and the URL ENGINE_FILE is made from name the same file.
+  const source = readFileSync(join(ROOT, 'research', 'engine-run.mjs'), 'utf8'), at = pathToFileURL(join(ROOT, 'research', 'engine-run.mjs'));
+  const imports = [...source.matchAll(/^import [^;]*? from '([^']+)';$/gm)].map(([, specifier]) => specifier).filter(specifier => specifier.endsWith('engine.js'));
+  const urls = [...source.matchAll(/new URL\('([^']+)', import\.meta\.url\)/g)].map(([, specifier]) => specifier);
+  assert.deepEqual([imports, urls], [['../engine.js'], ['../engine.js']]);
+  assert.equal(fileURLToPath(new URL(imports[0], at)), ENGINE_FILE);
+  assert.equal(ENGINE_FILE, join(ROOT, 'engine.js'));
+  assert.doesNotMatch(source, /await import\(|^const [A-Z_]+ = await /m);
+  // At run time: runEngine refuses a hold-through setting on the unmodified engine by comparing the engine it is
+  // handed with the one it imported. Handed the module at ENGINE_FILE, it refuses: that module is the one it runs.
+  // A second instance of the same file (another URL) is another module, which it does not recognise, and runs.
+  const prepared = prepareWindow(TREND, WINDOWS[8], SCALED), hold = byId['H-h60-l30-b10-s0'];
+  const same = await import(pathToFileURL(ENGINE_FILE).href), another = await import(`${pathToFileURL(ENGINE_FILE).href}?another`);
+  const tried = engine => {
+    try { return runEngine(TREND, prepared, hold, COSTS.default, {engine}).valid ? 'ran' : 'did not run'; }
+    catch (error) { return /^holdThrough is not supported by runEngine on the unmodified engine/.test(error.message) ? 'refused as the unmodified engine' : error.message; }
+  };
+  assert.deepEqual([prepared.valid, hold.holdThrough, tried(undefined), tried(same), tried(another)],
+    [true, true, 'refused as the unmodified engine', 'refused as the unmodified engine', 'ran']);
+
+  // No module a study worker loads has a top-level await, so terminating a worker while it loads cannot hit Node
+  // 22's abort. require() refuses exactly such a module graph (ERR_REQUIRE_ASYNC_MODULE): the graphs of the study
+  // worker and of research/engine-run.mjs load, and a module with a top-level await is refused (the check works).
+  const dir = scratch();
+  writeFileSync(join(dir, 'waits.mjs'), 'await Promise.resolve();\nexport const done = true;\n');
+  const required = file => spawnSync(process.execPath, ['--experimental-require-module', '--no-warnings', '-e',
+    `try { require(${JSON.stringify(file)}); console.log('loaded'); } catch (error) { console.log(error.code); }`], {encoding: 'utf8', cwd: ROOT});
+  assert.deepEqual([join(ROOT, 'research', 'study-worker.mjs'), join(ROOT, 'research', 'engine-run.mjs'), join(dir, 'waits.mjs')].map(file => required(file).stdout.trim()),
+    ['loaded', 'loaded', 'ERR_REQUIRE_ASYNC_MODULE']);
+  // And the event itself, about 1 s: sixteen study workers terminated as soon as the first of them answers (the
+  // others still loading), eight times over, in a process of its own. With the top-level await, a process doing
+  // this twenty times died in 2 of 12 runs (Node v22.23.5, measured before this test was written), so this part
+  // alone would rarely catch it again; the require() check above always does. Now the process must finish. A script file,
+  // not --input-type: a worker inherits the process's options and cannot start a file under that one.
+  writeFileSync(join(dir, 'terminate-while-loading.mjs'), `import {Worker} from 'node:worker_threads';
+const url = new URL(${JSON.stringify(new URL('./study-worker.mjs', import.meta.url).href)});
+let early = 0;
+for (let round = 0; round < 8; round++) {
+  const pool = Array.from({length: 16}, () => {
+    const worker = new Worker(url, {workerData: {role: 'study-worker'}});
+    worker.loaded = false;
+    worker.once('message', () => { worker.loaded = true; });
+    return worker;
+  });
+  await new Promise(resolve => { for (const worker of pool) worker.once('message', resolve); });
+  early += pool.filter(worker => !worker.loaded).length;
+  await Promise.all(pool.map(worker => worker.terminate()));
+}
+console.log('terminated while loading: ' + early);
+`);
+  const stress = spawnSync(process.execPath, [join(dir, 'terminate-while-loading.mjs')], {encoding: 'utf8', cwd: ROOT, timeout: 60000});
+  assert.deepEqual([stress.status, stress.signal], [0, null], stress.stderr.slice(-2000));
+  assert.match(stress.stdout, /^terminated while loading: [1-9]\d*\n$/, 'some workers were terminated before their loaded notice');
+});
+
 // What two runs of the same study may differ in: the timing and code lines of the record, and in the report the
 // status block (commit, module states, start time), which ends where the nominees begin.
 const stableRecord = path => readFileSync(path, 'utf8').split('\n').filter(line => !/^"(timing|code)": /.test(line)).join('\n');
@@ -574,15 +872,25 @@ test('dry run: determinism, and the worker count does not change a result', () =
 });
 
 test('dry run: every step leaves its part of the record', () => {
-  assert.equal(R.format, 'paper-trail-exploration-v2');
-  assert.match(R.status, /Exploration, not evidence/);
+  // Amendment 2 changed what a record holds (the buy-and-hold reading, the comparison account's row, Reading 9's
+  // figures, the calibration block, what a replaced record said): format v3, where Amendment 1's record was v2.
+  assert.equal(R.format, 'paper-trail-exploration-v3');
+  assert.match(R.status, /^Exploration, not evidence\./);
+  // The status follows the amended protocol: a confirmed nominee whose reading is "no" justifies nothing further.
+  assert.ok(R.status.includes('A confirmed nominee whose buy-and-hold reading is "no" justifies nothing further; one whose reading is "yes" ' +
+    'would justify writing a held-out contract for that one setting and nothing more.') && R.status.includes('independent of one another'));
+  // The measurement behind the protocol's two tables, held against the statistics that ran.
+  const calibrationFile = readFileSync(join(ROOT, 'research', 'calibration.json'));
+  assert.deepEqual(R.calibration, {file: 'research/calibration.json', sha256: sha256Hex(calibrationFile), statsSha256: JSON.parse(calibrationFile).statsSha256,
+    statsSha256ThatRan: R.code.modules.find(m => m.file === 'research/stats.mjs').sha256,
+    measuredWithTheStatsThatRan: JSON.parse(calibrationFile).statsSha256 === sha256Hex(readFileSync(join(ROOT, 'research', 'stats.mjs')))});
   assert.ok(A.bytes < 2e6);
   // Every non-default option is a recorded deviation with its reason; a path outside the working directory is
   // not written down. The banner says first that this is a dry run.
   assert.deepEqual(R.deviations.map(d => d.option), ['market', 'out', 'report', 'workers', 'resamples', 'protocol', 'settings']);
   assert.ok(R.deviations.every(d => typeof d.reason === 'string' && d.reason.length > 20 && 'default' in d));
   assert.deepEqual({...R.deviations.find(d => d.option === 'out'), reason: null},
-    {option: 'out', value: '(a path outside the working directory; not recorded)', default: 'research/results', reason: null});
+    {option: 'out', value: '(an absolute path, or one outside the working directory; not recorded)', default: 'research/results', reason: null});
   assert.deepEqual(R.deviations.find(d => d.option === 'settings').value.perFamily, {P: 240, H: 240, R: 240, X: 120, L: 80});
   assert.deepEqual(R.deviations.find(d => d.option === 'protocol').value, {...SCALED, from: '2021-01-01T00:00:00.000Z'});
   assert.match(R.banner[0], /^DRY RUN: this run did NOT use the complete exchange store\./);
@@ -710,6 +1018,22 @@ test('dry run: every step leaves its part of the record', () => {
     assert.deepEqual(c.regression, plain(ols(valid, c.perWindow.map(w => w.b))));
     assert.ok(c.regression.n === 9 && Number.isFinite(c.regression.intercept + c.regression.slope));
     assert.equal(c.meanComparison, mean(c.perWindow.map(w => w.b)));
+    // The buy-and-hold reading beside the label, at default costs, and at feeBps 10 and 40 (reported, not used):
+    // research/stats.mjs on r and b aligned to the confirmation windows, with the nominees' k, at each level's costs.
+    const read = (rKey, bKey) => moreThanAShareOfBuyAndHold({r: aligned(rKey), b: aligned(bKey), k: 4, minValidWindows: 8, resamples: 300});
+    assert.deepEqual(c.buyAndHold, plain({...read('r', 'b'), fee10: read('rFee10', 'bFee10'), fee40: read('rFee40', 'bFee40')}));
+    assert.deepEqual([c.moreThanAShareOfBuyAndHold, c.labelWithReading], [c.buyAndHold.reading, labelWithReading(c)]);
+    assert.deepEqual([c.buyAndHold.n, c.buyAndHold.slope, c.buyAndHold.intercept], [c.regression.n, c.regression.slope, c.regression.intercept]);
+    // In the record the reading stands beside the label: the two fields, then the two as printed.
+    const keys = Object.keys(c), at_ = keys.indexOf('label');
+    assert.deepEqual(keys.slice(at_, at_ + 3), ['label', 'moreThanAShareOfBuyAndHold', 'labelWithReading']);
+    // Reading 9, at default costs: the shape of the returns. Window 14, below the floor, keeps its place in the
+    // first half (10 to 14), which therefore has four valid windows.
+    assert.deepEqual({autocorrelation: c.autocorrelation, halves: c.halves, lowestThird: c.lowestThird}, plain(descriptiveFigures(CONFIRMATION, r, aligned('b'))));
+    assert.deepEqual([c.halves.map(h => [h.windows, h.n]), c.lowestThird.n], [[[[10, 14], 4], [[15, 19], 5]], 3]);
+    // The comparison account beside this nominee is the comparison account's own row, window by window.
+    for (const w of c.perWindow)
+      assert.deepEqual(R.comparisonAccount.perWindow.find(row => row.index === w.index), {index: w.index, b: w.b, bFee10: w.bFee10, bFee40: w.bFee40});
     for (const asset of ASSETS) {
       const d = c.direction[asset];
       assert.deepEqual([d.hits, d.misses, d.flat], [0, 1, 2].map(at => c.perWindow.reduce((sum, w) => sum + w.direction[asset][at], 0)));
@@ -732,13 +1056,15 @@ test('dry run: every step leaves its part of the record', () => {
     assert.equal(simulate(TREND, p, byId[nominee.id], COSTS.fee10).returnPct, w.rFee10);
     assert.equal(simulate(TREND, p, byId[nominee.id], COSTS.fee40).returnPct, w.rFee40);
   }
-  const labels = Object.fromEntries(R.nominees.map(n => [n.family, n.confirmation.label]));
-  assert.deepEqual(labels, {P: 'confirmed and cost-robust', H: 'confirmed and cost-robust', X: 'not confirmed', L: 'confirmed and cost-robust'});
+  const labels = Object.fromEntries(R.nominees.map(n => [n.family, n.confirmation.labelWithReading]));
+  assert.deepEqual(labels, {P: 'CONFIRMED AND COST-ROBUST; more than a share of buy-and-hold: yes', H: 'CONFIRMED AND COST-ROBUST; more than a share of buy-and-hold: yes',
+    X: 'NOT CONFIRMED; more than a share of buy-and-hold: no', L: 'CONFIRMED AND COST-ROBUST; more than a share of buy-and-hold: yes'});
   // With this scaled-down protocol's minimum raised above the nine valid windows nothing is confirmed, whatever
-  // the p-values: "at least 20 valid confirmation windows" at this scale.
+  // the p-values: "at least 20 valid confirmation windows" at this scale. The reading needs as many: it is no.
   const strict = confirmNominees({market: TREND, windows: CONFIRMATION, prepared: CONFIRMATION.map(w => prepareWindow(TREND, w, SCALED)),
     nominees: R.nominees.map(n => byId[n.id]), protocol: {...SCALED, minValidConfirmationWindows: 10}, resamples: 300});
-  assert.deepEqual(strict.map(c => [c.label, c.conditions.enoughWindows, c.n, c.p]), R.nominees.map(n => ['not confirmed', false, 9, n.confirmation.p]));
+  assert.deepEqual(strict.map(c => [c.label, c.conditions.enoughWindows, c.n, c.p, c.moreThanAShareOfBuyAndHold, c.buyAndHold.conditions.enoughWindows, c.buyAndHold.p]),
+    R.nominees.map(n => ['not confirmed', false, 9, n.confirmation.p, 'no', false, n.confirmation.buyAndHold.p]));
 
   // Step 6: every nominee through an engine, and which one (PROTOCOL.md, Simulation).
   const exact = Object.fromEntries(R.nominees.map(n => [n.family, n.exactCheck]));
@@ -772,18 +1098,74 @@ test('dry run: every step leaves its part of the record', () => {
   for (const h of R.costHurdle.horizons) for (const asset of ASSETS)
     assert.ok(h[asset].minutes > 20000 && h[asset].medianAbsLogMoveBps > 0 && h[asset].shareOfDefaultRoundTrip === h[asset].medianAbsLogMoveBps / 14);
 
-  // The plain summary: its first line says what the run was not, it names every nominee with its label and the
-  // reference it was checked against, and it makes no claim.
+  // The plain summary: its first line says what the run was not, it names every nominee with its label, the
+  // buy-and-hold reading beside it and the reference it was checked against, gives the comparison account's own
+  // row, and makes no claim.
   const text = summaryText(R, A);
   assert.deepEqual(text.split('\n').slice(0, 3), [...R.banner, 'Exploration study: simulated cash only. Exploration, not evidence.']);
   assert.ok(text.includes(`wrote ${A.path}`) && text.includes(`and ${A.reportPath}`));
   for (const nominee of R.nominees)
-    assert.ok(text.includes(`${nominee.id}:`) && text.includes(nominee.confirmation.label.toUpperCase()) && text.includes(nominee.exactCheck.reference));
+    assert.ok(text.includes(`${nominee.id}:`) && text.includes(`: ${labelWithReading(nominee.confirmation)}; engine check: `) && text.includes(nominee.exactCheck.reference));
+  // Beside each label stand the reading's fit and the reading's own p-value, the larger of the fit's and the adjusted
+  // series' (study3 finding 1: the summary once called it the fit's p). A record whose fit p differs shows the reading's.
+  const signed = value => `${value >= 0 ? '+' : ''}${value.toFixed(3)}%`;
+  for (const {confirmation: c} of R.nominees)
+    assert.ok(text.includes(`buy-and-hold fit intercept ${signed(c.buyAndHold.intercept)}, slope ${c.buyAndHold.slope.toFixed(3)}, ` +
+      `reading p ${pValue(c.buyAndHold.p)}: ${labelWithReading(c)}`), c.buyAndHold.p);
+  const apart = structuredClone(R), moved = apart.nominees[0].confirmation.buyAndHold;
+  moved.pFit = moved.p > 0.5 ? moved.p - 0.4 : moved.p + 0.4;
+  assert.ok(summaryText(apart).includes(`reading p ${pValue(moved.p)}: `) && !summaryText(apart).includes(`reading p ${pValue(moved.pFit)}: `));
   assert.ok(text.includes('windows agree with the engine with its scheduled-decision branch replaced (hold-through oracle), fed the history the rule reads'));
+  assert.ok(text.includes(`Comparison account (half BTC, half LINK, held) on 9 confirmation windows above the coverage floor: mean ` +
+    `+${R.comparisonAccount.mean.toFixed(3)}%, confirmation p ${pValue(R.comparisonAccount.p)} against 0.0125: simply holding did not pass the test a nominee is confirmed by\n`));
+  // The label never stands alone: in the summary, in RESULTS.md and in the record, each one has its reading beside it.
+  assert.deepEqual([labelsAlone(text), labelsAlone(A.report), labelsAlone(readFileSync(A.path, 'utf8'))], [[], [], []]);
+  assert.equal([...A.report.matchAll(PRINTED_LABEL)].length, 2 * R.nominees.length, 'twice in the report: with the nominees, and in each one\'s section');
+  // The summary says nothing about the protocol's tables while they were measured with the statistics that ran.
+  assert.equal(text.includes('measured with another version'), !R.calibration.measuredWithTheStatsThatRan);
   // Neither the summary, the record nor the report uses a reserved word, nor anything that looks like an address.
-  for (const written of [text, readFileSync(A.path, 'utf8'), A.report]) {
+  // The report quotes the protocol's own negation word for word and is held to the rule everywhere else.
+  for (const written of [text, readFileSync(A.path, 'utf8'), unquoted(A.report)]) {
     assert.doesNotMatch(written, RESERVED);
     assert.doesNotMatch(written, /@/);
+  }
+});
+
+test('RISING-MARKET CONTROL: on markets that only rise, confirmed nominees read "no" beside their label, and simply holding passes', async () => {
+  // Amendment 2: "A long-only rule gains whenever the two assets rise, so a mean above zero can be nothing more than
+  // time spent invested." On these synthetic markets nothing can be timed and both assets rise about 12% a window:
+  // the search nominates, the confirmation test confirms what is only time invested, and the reading beside each
+  // label says so. A fixed seed; another could confirm fewer nominees without a defect (seed 3 confirms two, both "no").
+  for (const seed of [6]) {
+    const run = await runStudy({market: risingMarket(seed), protocol: SCALED, settings: SEARCHED, resamples: 300, workers: 2, out: null});
+    const {results, report} = run, text = summaryText(results), json = JSON.stringify(results);
+    const confirmed = results.nominees.filter(n => n.confirmation.label !== 'not confirmed');
+    assert.ok(confirmed.length >= 2, `seed ${seed}: ${results.nominees.map(n => n.confirmation.labelWithReading).join(', ')}`);
+    for (const {id, confirmation: c} of confirmed) {
+      assert.equal(c.moreThanAShareOfBuyAndHold, 'no', `seed ${seed}: ${id}`);
+      // RESULTS.md explains the "no" in the protocol's words, with the fit: intercept, slope, both standard errors,
+      // both p-values and the bar.
+      const section = report.slice(report.indexOf(`### ${id}\n`), report.indexOf('\n### ', report.indexOf(`### ${id}\n`) + 1) >>> 0);
+      const h = c.buyAndHold;
+      for (const words of [`Label: **${labelWithReading(c)}**.`, `fitted by least squares over ${h.n} valid windows: intercept ${h.intercept < 0 ? '' : '+'}${h.intercept.toFixed(3)}% ` +
+        `(standard error ${h.seIntercept.toFixed(3)}; one-sided p-value for intercept > 0, Student's t with n − 2 degrees of freedom: ${pValue(h.pFit)}), ` +
+        `slope ${h.slope.toFixed(3)} (standard error ${h.seSlope.toFixed(3)}); the confirmation p-value of the series r − slope × b: ${pValue(h.adjusted.p)}; ` +
+        `the reading's p-value, the larger of the two: ${pValue(h.p)}, against 0.05 / ${c.k} = ${(0.05 / c.k).toFixed(4)}.`,
+        'Reading: **no**.', 'In the protocol\'s words, "*No* means the nominee\'s return on these windows cannot be told apart from holding the fraction ' +
+        `\`slope\` of the comparison account." Here the slope is ${h.slope.toFixed(3)}.`])
+        assert.ok(section.includes(words), `seed ${seed}, ${id}: ${words}`);
+      assert.ok(report.includes(`- **${id}** (`) && report.includes(`): **${labelWithReading(c)}**. Measured: `));
+      assert.ok(text.includes(`: ${labelWithReading(c)}; engine check: `));
+      assert.ok(json.includes(`"label":"${c.label}","moreThanAShareOfBuyAndHold":"no","labelWithReading":"${labelWithReading(c)}"`));
+    }
+    // Simply holding passed the same test, on the same windows, with the nominees' bar.
+    const held = results.comparisonAccount;
+    assert.deepEqual([held.k, held.passed], [results.nominees.length, true]);
+    assert.ok(report.includes(`Measured: simply holding PASSED the test a nominee is confirmed by, on these windows and with the nominees' bar`));
+    assert.ok(text.includes('simply holding PASSED the test a nominee is confirmed by'));
+    assert.deepEqual([labelsAlone(text), labelsAlone(report), labelsAlone(json)], [[], [], []]);
+    // Nothing in the report says that no setting was confirmed: some were.
+    assert.ok(!report.includes('settings this run searched was confirmed') && !report.includes('settings it searched was confirmed'));
   }
 });
 
@@ -907,6 +1289,25 @@ test('the search-adjusted p-value is handed every design window as a column, the
   assert.deepEqual([none.pooled.eligible, none.pooled.best, none.pooled.searchAdjusted.p], [0, null, null]);
 });
 
+test('the best T is the one research/stats.mjs names: scores within 1e-12 of each other tie, and a tie goes to the earlier setting', () => {
+  // A series and its reverse have the same score as written; computed, the reverse's is 4.4e-16 higher here. The
+  // two are a tie (research/stats.mjs, conventions), so the earlier setting holds the best T, in the table as in the
+  // search-adjusted p-value, and the study's own cross-check of the two does not stop the run.
+  const x = [1.57, 3.78, 3.81, 1.29, 2.91, -1.97, 1.1, -0.03, 2.35, 1.3, 2.53, 3.86], reversed = x.toReversed();
+  assert.ok(score(reversed) > score(x) && score(reversed) - score(x) < 1e-12 * score(x), `${score(x)} ${score(reversed)}`);
+  const twelve = {...PROTOCOL, minValidDesignWindows: 12}, fills = [Array(12).fill(2), Array(12).fill(2)];
+  const tied = scoreDesign({settings: SEARCHED.slice(0, 2), returns: [x, reversed], fills, protocol: twelve, resamples: 200});
+  assert.deepEqual([tied.pooled.best.id, tied.pooled.best.T, tied.families.P.best.id], [SEARCHED[0].id, score(x), SEARCHED[0].id]);
+  assert.equal(searchAdjustedP({returns: [x, reversed], eligible: [0, 1], resamples: 200}).argmax, 0);
+  // Above the tolerance the later setting holds it.
+  const higher = x.map(v => v + 0.01), apart = scoreDesign({settings: SEARCHED.slice(0, 2), returns: [x, higher], fills, protocol: twelve, resamples: 200});
+  assert.deepEqual([apart.pooled.best.id, apart.pooled.best.T], [SEARCHED[1].id, score(higher)]);
+  // Nomination ranks by T as computed: only exactly equal scores are ties there, so the reverse comes first.
+  const scores = new Map([[SEARCHED[0].id, {eligible: true, T: score(x), mean: mean(x), returns: x}],
+    [SEARCHED[1].id, {eligible: true, T: score(reversed), mean: mean(reversed), returns: reversed}]]);
+  assert.deepEqual(nominateFamily(SEARCHED.slice(0, 2), scores).tenConsidered.ids, [SEARCHED[1].id, SEARCHED[0].id]);
+});
+
 test('RANDOM-WALK CONTROL: on driftless markets the pipeline labels no nominee confirmed', async () => {
   // No rule can predict a driftless random walk, and every trade costs about 14 bps a round trip. The search still
   // turns up settings whose design mean happens to be positive (that is what a search does); the one look at the
@@ -923,32 +1324,66 @@ test('RANDOM-WALK CONTROL: on driftless markets the pipeline labels no nominee c
     }
     // The best of 920 no-skill settings is not rare: its search-adjusted p-value is nowhere near small.
     assert.ok(results.pooled.searchAdjusted.p > 0.2, `seed ${seed}: pooled search-adjusted p ${results.pooled.searchAdjusted.p}`);
-    // "Not confirmed" is bounded as the protocol bounds it, with the number of settings this run searched.
-    assert.ok(report.includes('no setting among the 920 searched was confirmed on these windows at these costs.'));
-    assert.ok(report.includes('It does not show a smaller positive mean is absent.'));
+    // "Not confirmed" is bounded as the protocol bounds it, as a measured fact of this run only because nothing was
+    // confirmed, with the number of settings this run searched (finding 15 of the second round).
+    assert.ok(report.includes('- Measured: none of the 920 settings this run searched was confirmed on these windows at these costs.\n'));
+    assert.ok(report.includes('Measured: this run searched 920 settings on 10 design windows and ran ') &&
+      report.includes('; none of the 920 settings it searched was confirmed on these windows at these costs.\n'));
+    assert.ok(report.includes('It does not show that a smaller positive mean is absent.'));
+    // The label is never printed without the buy-and-hold reading beside it.
+    assert.deepEqual([labelsAlone(report), labelsAlone(summaryText(results))], [[], []]);
   }
   // The control is not vacuous: the search did nominate, and those nominees did not hold up.
   assert.ok(outcomes.length >= 5, outcomes.join('\n'));
 });
 
-test('the record carries the protocol\'s seven Readings word for word, further readings apart, and the report its limits', () => {
+test('the record carries the protocol\'s nine Readings word for word, further readings apart, and the report quotes its bounds and limits', () => {
   const protocol = readFileSync(join(ROOT, 'research', 'PROTOCOL.md'), 'utf8');
   const joined = block => block.split('\n').map(line => line.trim()).filter(Boolean).join(' ');
-  // "### Readings" up to "## Measures": seven numbered items.
+  // "### Readings" up to "## Measures": nine numbered items since Amendment 2 (the first two versions had seven).
   const items = protocol.split('### Readings')[1].split('## Measures')[0].split(/\n(?=\d+\. )/).slice(1).map(item => joined(item.replace(/^\d+\. /, '')));
-  assert.equal(items.length, 7);
+  assert.equal(items.length, 9);
   assert.deepEqual([...READINGS], items);
   assert.deepEqual(R.readings, {protocol: items, notInProtocol: [...FURTHER_READINGS]});
   assert.ok(FURTHER_READINGS.length > 0 && FURTHER_READINGS.every(text => !items.includes(text)));
-  // "What a result would and would not establish", with the one phrase the report rewords.
-  const limits = protocol.split('## What a result would and would not establish')[1].split('## Amendments')[0].trim().split(/\n\n/).map(joined);
-  const reworded = limits.map(text => text.replace(`not a trading ${'ed' + 'ge'}`, 'not a demonstrated trading advantage'));
-  assert.notDeepEqual(reworded, limits);
-  assert.deepEqual([...LIMITS], reworded);
-  // The "two limits no test on these windows can remove".
-  const two = protocol.split('Two limits no test on these windows can remove:')[1].split('## Always reported')[0].trim().split(/\n(?=- )/).map(item => joined(item.replace(/^- /, '')));
-  assert.deepEqual([...TEST_LIMITS], two);
-  assert.deepEqual(two.map(text => text.slice(0, 22)), ['**Rare large losses.**', '**Low power for slow r']);
+  // What Readings 7 to 9 now state is no longer stated a second time among the further readings: none of their
+  // distinctive phrases appears there.
+  for (const phrase of ['keeps its place', 'adjacent', 'can be drawn', 'valid confirmation windows only', 'above the floor',
+    'windows valid for the nominee', 'same k', 'places apart', 'not floored', 'windows 50 to 61', '62 to 73', 'floor(n / 3)',
+    'ties to the earlier window'])
+    assert.deepEqual([phrase, FURTHER_READINGS.filter(text => text.includes(phrase))], [phrase, []]);
+  assert.ok(items.slice(6).every(item => ['keeps its place', 'above the floor', 'floor(n / 3)'].some(phrase => item.includes(phrase))), 'the phrases are the Readings\' own');
+
+  // "What a result would and would not establish", as it now stands: both paragraphs, word for word (finding 15:
+  // the report introduces them as the protocol's text instead of stating them about the run). The first version of
+  // this test expected one phrase reworded; the report now quotes, and a quotation is not reworded.
+  const bounds = protocol.split('## What a result would and would not establish')[1].split('## Amendments')[0].trim().split(/\n\n/).map(joined);
+  assert.deepEqual([...OUTCOME_BOUNDS], bounds);
+  assert.ok(bounds[0].includes('If nothing is confirmed, that finding is bounded the same way'), 'the amended, conditional sentence');
+  // Its one reserved word stands inside the protocol's own negation.
+  assert.deepEqual(OUTCOME_BOUNDS.join(' ').match(new RegExp(RESERVED.source, 'gi')), ['ed' + 'ge']);
+  assert.ok(OUTCOME_BOUNDS[0].includes(`nothing more: not a trading ${'ed' + 'ge'}, not executable fills, not future profit.`));
+
+  // The limits, as the amended section has them, pointing to its two tables instead of repeating their figures.
+  assert.ok(protocol.includes(`\n## ${TESTS_SECTION}\n`), 'the section title as amended');
+  const section = protocol.split(`## ${TESTS_SECTION}`)[1].split('## Always reported')[0];
+  const listed = section.split('Limits that no test on these windows can remove:')[1].split('**How often a real mean is found.**')[0].trim()
+    .split(/\n(?=- )/).map(item => joined(item.replace(/^- /, '')));
+  assert.deepEqual(listed.map(text => text.split('**')[1]), ['Rare large losses.', 'Dependence between windows.', 'Low power.']);
+  // The report lists exactly the protocol's three (study3 finding 0: it once added a fourth under the same heading).
+  assert.deepEqual(TEST_LIMITS.map(text => text.split('**')[1]), ['Rare large losses.', 'Dependence between windows.', 'Low power.']);
+  // The rising-market point stands apart: it is the first table's last row, read, and the protocol does not list it.
+  assert.ok(section.includes('- **A rising market** (the last row).'), 'the first table\'s last row, read');
+  assert.ok(!listed.some(text => text.includes('rising market')) && !RISING_MARKET.includes('**'));
+  assert.doesNotMatch(RISING_MARKET, /%|\d\.\d|\d,\d{3}|times/);
+  assert.equal(TEST_LIMITS[0], listed[0], 'the first limit holds no figure of a table and is the protocol\'s text');
+  // The protocol's bold sentence, word for word.
+  assert.ok(listed[1].includes(`So the limit is stated instead: **${INDEPENDENCE}**`) && TEST_LIMITS[1].includes(`So the limit is stated instead: **${INDEPENDENCE}**`));
+  assert.ok(listed[2].endsWith('"Not confirmed" does not show that a smaller positive mean is absent.') && TEST_LIMITS[2].endsWith('"Not confirmed" does not show that a smaller positive mean is absent.'));
+  // No figure of the two tables is repeated: no percentage, no decimal, no count of settings, and the tables are named.
+  for (const text of TEST_LIMITS) assert.doesNotMatch(text, /%|\d\.\d|\d,\d{3}|times/);
+  for (const name of ['How often each test passes when there is nothing to find', 'How often a real mean is found'])
+    assert.ok(section.includes(`**${name}.**`) && TEST_LIMITS.some(text => text.includes(`("${name}")`)), name);
 });
 
 test('RESULTS.md: every required section in order, the dry-run banner first, and the wording rules', () => {
@@ -971,14 +1406,31 @@ test('RESULTS.md: every required section in order, the dry-run banner first, and
   for (const module of R.code.modules) assert.ok(status.includes(`| \`${module.file}\` | \`${module.sha256}\` | ${module.state} |`), module.file);
   assert.ok(status.includes('`engine.js` equals the engine at commit `6f6b693`: yes'));
   assert.ok(status.includes('manifest SHA-256 none (no store was read)') && status.includes(`started ${R.timing.startedAt}`));
-  assert.ok(status.includes('complete exchange store: no') && status.includes('7, each with its reason under "Deviations"'));
-  // The nominees with their labels in plain words.
+  assert.ok(status.includes('complete exchange store: no;') && status.includes('7, each with its reason under "Deviations"'));
+  // The calibration behind the protocol's tables, and the sentence that is there only when it was measured with
+  // another research/stats.mjs (the line is checked both ways below).
+  assert.ok(status.includes(`- Calibration. Measured: \`research/calibration.json\`, SHA-256 \`${R.calibration.sha256}\`, says the protocol's two tables were ` +
+    `measured with \`research/stats.mjs\` SHA-256 \`${R.calibration.statsSha256}\`; the \`research/stats.mjs\` that ran has SHA-256 ` +
+    `\`${R.calibration.statsSha256ThatRan}\`; the same: ${R.calibration.measuredWithTheStatsThatRan ? 'yes' : 'no'}.`));
+  // Only the output paths are looked at for an earlier record, and the report says so (finding 16).
+  assert.ok(status.includes('- Earlier record. Measured: none was replaced. Only the two output paths are checked for an earlier record ' +
+    '(`exploration.json` in the output directory, and the report): a record written to any other path is not seen.'));
+  // The nominees with their labels, each with the buy-and-hold reading beside it, in plain words.
   const nominees = section('Nominees and their labels');
-  for (const {id, confirmation: c} of R.nominees) assert.ok(nominees.includes(`- **${id}** (`) && nominees.includes(`**${c.label.toUpperCase()}**`));
+  for (const {id, confirmation: c} of R.nominees) assert.ok(nominees.includes(`- **${id}** (`) && nominees.includes(`**${labelWithReading(c)}**`));
   assert.ok(nominees.includes('rerun with feeBps 10 its mean return stayed above 0'));
   assert.ok(nominees.includes('on these windows at these costs this setting was not confirmed, because its mean return is not above 0, and its confirmation p-value is not below 0.0125'));
-  assert.ok(nominees.includes('It does not show a smaller positive mean is absent.'));
-  assert.equal(nominees.includes('no setting among'), false, 'that sentence is for a run in which nothing was confirmed');
+  assert.ok(nominees.includes('and its return is more than a share of buy-and-hold: on 9 valid windows the fit\'s intercept is above 0 and the reading\'s p-value '));
+  assert.ok(nominees.includes('and its buy-and-hold reading is no, because the fit\'s intercept is not above 0, and the reading\'s p-value '));
+  assert.ok(nominees.includes('It does not show that a smaller positive mean is absent.'));
+  assert.equal(nominees.includes('settings this run searched was confirmed'), false, 'that sentence is for a run in which nothing was confirmed');
+  // The comparison account's own row: the numbers, and whether simply holding passed with the nominees' bar.
+  assert.ok(nominees.includes('The comparison account\'s own row: half BTC, half LINK, bought once and held, same costs, put through the same ' +
+    'confirmation calculation on every confirmation window above the coverage floor (Reading 8). Measured:\n\n| Cost level | Valid windows |'));
+  assert.ok(nominees.includes(`| default (feeBps 2) | 9 | +${R.comparisonAccount.mean.toFixed(3)}% | ${R.comparisonAccount.sd.toFixed(3)} | `));
+  assert.ok(nominees.includes('Measured: simply holding did not pass the test a nominee is confirmed by, on these windows and with the nominees\' bar: ' +
+    `at least 8 valid windows: yes (9); mean above 0: yes (+${R.comparisonAccount.mean.toFixed(3)}%); confirmation p below 0.05 / 4 = 0.0125: no ` +
+    `(${pValue(R.comparisonAccount.p)}).`));
   // The default setting, the per-family table and each nominee at the three cost levels.
   assert.ok(section('The default setting on all windows').includes('`P-h7-l7-b10-s0` (seven-minute horizon, seven lookback, 10 bps buffer, no stop) ran on 17 of 20 windows'));
   const families = section('Per family');
@@ -993,9 +1445,26 @@ test('RESULTS.md: every required section in order, the dry-run banner first, and
   assert.equal(each.split('| feeBps 40 | 9 |').length - 1, 4);
   // A resample share of 0 among this run's 300 resamples is "below 1 in 300", never "below 1 in 10,000".
   assert.ok(R.nominees.some(n => n.confirmation.fee10.pResample === 0) && each.includes(' | < 0.004 | ') && !each.includes('< 0.0001 | < 0.0001'));
-  for (const words of ['Reported alongside, not pass/fail', 'return r regressed on the comparison account\'s return b', 'Direction sign test, two-sided',
-    'Worst window', 'Skewness', 'Lag-1 autocorrelation', 'average fees per window', 'p (Student t)', 'p (resample)'])
+  for (const words of ['Reported alongside, not pass/fail', 'r = intercept + slope × b fitted by least squares over 9 valid windows: intercept ',
+    'one-sided p-value for intercept > 0, Student\'s t with n − 2 degrees of freedom', 'the confirmation p-value of the series r − slope × b',
+    'the reading\'s p-value, the larger of the two', 'Direction sign test, two-sided', 'Worst window', 'Skewness', 'Lag-1 autocorrelation',
+    'average fees per window', 'p (Student t)', 'p (resample)', 'The shape of the returns (Reading 9): descriptive figures, not tests.'])
     assert.ok(each.includes(words), words);
+  // Each nominee: the label with its reading, the fit behind the reading, and the shape of its returns.
+  for (const {id, confirmation: c} of R.nominees) {
+    const own = each.slice(each.indexOf(`### ${id}\n`), each.indexOf('\n### ', each.indexOf(`### ${id}\n`) + 1) >>> 0), h = c.buyAndHold;
+    assert.ok(own.includes(`Label: **${labelWithReading(c)}**. Measured: `), id);
+    assert.ok(own.includes(`(standard error ${h.seIntercept.toFixed(3)}; one-sided p-value for intercept > 0, Student's t with n − 2 degrees of freedom: ` +
+      `${pValue(h.pFit)}), slope ${h.slope.toFixed(3)} (standard error ${h.seSlope.toFixed(3)}); the confirmation p-value of the series r − slope × b: ` +
+      `${pValue(h.adjusted.p)}; the reading's p-value, the larger of the two: ${pValue(h.p)}, against 0.05 / 4 = 0.0125.`), id);
+    assert.ok(own.includes(`Reading: **${h.reading}**.`) && own.includes(`the reading at feeBps 10 is ${h.fee10.reading} (p ${pValue(h.fee10.p)}), at feeBps 40 ` +
+      `${h.fee40.reading} (p ${pValue(h.fee40.p)}).`), id);
+    assert.equal(own.includes('In the protocol\'s words, "*No* means the nominee\'s return on these windows cannot be told apart from holding the ' +
+      'fraction `slope` of the comparison account."'), h.reading === 'no', id);
+    assert.ok(own.includes(`the autocorrelation of r at lags 1 to 4: ${c.autocorrelation.map(a => a.toFixed(2).replace(/^-(0\.00)$/, '$1')).join(', ')}; ` +
+      `the mean of r in the first half of the confirmation windows, windows 10 to 14: `) && own.includes(' over 4 valid windows, and in the second half, ' +
+      'windows 15 to 19: ') && own.includes(` over 5 valid windows; the mean of r over the 3 valid windows in which b was lowest (windows ${c.lowestThird.windows.join(', ')}, lowest b first): `), id);
+  }
   // The engine check and its references, the cost hurdle, coverage with the invalid windows, and no receipts here.
   const engine = section('Engine check');
   for (const {id, family, exactCheck: e} of R.nominees)
@@ -1008,17 +1477,31 @@ test('RESULTS.md: every required section in order, the dry-run banner first, and
   // The Readings, the further ones flagged; the deviations with reasons; the limits.
   const readings = section('Readings');
   READINGS.forEach((text, i) => assert.ok(readings.includes(`\n${i + 1}. ${text}\n`)));
-  assert.ok(readings.indexOf('**They are not in the protocol**') > readings.indexOf(`7. ${READINGS[6]}`));
+  assert.ok(readings.indexOf('**They are not in the protocol**') > readings.indexOf(`9. ${READINGS[8]}`));
   for (const text of FURTHER_READINGS) assert.ok(readings.indexOf(`- ${text}`) > readings.indexOf('**They are not in the protocol**'));
   const deviations = section('Deviations');
   R.deviations.forEach((d, i) => assert.ok(deviations.includes(`\n${i + 1}. **${d.option}**: `) && deviations.includes(`Reason: ${d.reason}`), d.option));
+  // The last section quotes the protocol's bounds as the protocol's text, then the limits, then what this run did.
   const limits = section('What this result would and would not establish');
-  for (const text of [...LIMITS, ...TEST_LIMITS]) assert.ok(limits.includes(`- ${text}\n`));
+  assert.ok(limits.startsWith('## What this result would and would not establish\n\nThe protocol bounds either outcome as follows:\n\n' +
+    `> ${OUTCOME_BOUNDS[0]}\n>\n> ${OUTCOME_BOUNDS[1]}\n\nThe "limits measured above" in that quotation are the protocol's limits that ` +
+    `no test on these windows can remove (\`research/PROTOCOL.md\`, "${TESTS_SECTION}"; the measured figures are in its two tables):\n\n` +
+    TEST_LIMITS.map(text => `- ${text}\n`).join('') + '\nNot one of those limits, from the same section\'s reading of its first table ' +
+    `(A rising market, the last row): ${RISING_MARKET}\n\n`));
+  assert.ok(limits.endsWith('Measured: this run searched 920 settings on 10 design windows and ran 4 nominees on 10 confirmation windows; 3 of them were ' +
+    'confirmed, each with its buy-and-hold reading beside its label above.\n'));
+  // Finding 15: outside the quotation nothing says that no setting was confirmed, here where three were.
+  for (const words of ['no setting among', 'settings this run searched was confirmed', 'settings it searched was confirmed'])
+    assert.equal(unquoted(report).includes(words), false, words);
+  // The stale text of Amendment 1 is gone: the old title of the protocol's section, its 300 settings and an option
+  // research/calibration.mjs does not have.
+  for (const words of ['What the two tests can and cannot do', '300 settings', '--settings N', 'Two limits']) assert.equal(report.includes(words), false, words);
+  assert.ok(families.includes(`is the first table of \`research/PROTOCOL.md\`, "${TESTS_SECTION}", measured there at the width of one family of P, H or R and of all families pooled`));
 
   // Wording. Every number the run produced is labelled Measured: outside the Readings and the limits, a line of
   // prose that holds a digit says Measured or is fixed text of the protocol (headings, the legend of a table),
   // and every table follows a line that says Measured.
-  const fixed = [/^# /, /^## /, /^### /, /^> \*\*/, /^- A confirmed nominee means only/, /^- "Not confirmed" is bounded/, /^- The search-adjusted p-value answers/,
+  const fixed = [/^# /, /^## /, /^### /, /^> \*\*/, /^- The search-adjusted p-value answers/,
     /^- Settings whose design returns are identical/, /^ {3}- /, /^\d+\. \*\*/, /^Written by `node research\/study\.mjs`/];
   let measured = false, body = true;
   for (const line of lines) {
@@ -1029,8 +1512,9 @@ test('RESULTS.md: every required section in order, the dry-run banner first, and
     if (body && /\d/.test(line) && !measured) assert.ok(fixed.some(pattern => pattern.test(line)), `a number without Measured: ${line.slice(0, 120)}`);
   }
   assert.ok(lines.filter(line => line.includes('Measured')).length > 30);
-  // No reserved word, no address, nothing but plain text.
-  assert.doesNotMatch(report, RESERVED);
+  // No reserved word outside the protocol's quoted negation, no address, nothing but plain text.
+  assert.doesNotMatch(unquoted(report), RESERVED);
+  assert.ok(unquoted(report).length < report.length - 900, 'the quotation was found and taken out');
   assert.doesNotMatch(report, /@|undefined|NaN|\[object/);
   // F13 of the first review: a p-value of 0 is printed as "below 1 / resamples", rounded up to one digit.
   assert.deepEqual([pValue(0, 10000), pValue(0, 300), pValue(0, 200), pValue(1 / 300, 300), pValue(0.5, 300), pValue(null, 300), pValue(0.00003)],
@@ -1042,12 +1526,50 @@ test('RESULTS.md: every required section in order, the dry-run banner first, and
   assert.doesNotMatch(tiny, /-0\.0+(%| \|)/);
 
   // A run with no nominee and nothing eligible: the same sections, "None" where there is nothing, n/a not a number.
-  const empty = renderResults({...R, banner: [], deviations: [], nominees: [], pooled: {...R.pooled, eligible: 0, best: null, searchAdjusted: {...R.pooled.searchAdjusted, p: null}}});
+  // The comparison account's row is the same numbers with no k and no bar.
+  const alone = {...R.comparisonAccount, k: 0, threshold: null, passed: null, conditions: {...R.comparisonAccount.conditions, pBelowThreshold: null}};
+  const empty = renderResults({...R, banner: [], deviations: [], nominees: [], comparisonAccount: alone,
+    pooled: {...R.pooled, eligible: 0, best: null, searchAdjusted: {...R.pooled.searchAdjusted, p: null}}});
   assert.equal(empty.split('\n')[0], '# Exploration results', 'without a banner the title is the first line');
   assert.deepEqual(empty.split('\n').filter(line => line.startsWith('## ')).map(line => line.slice(3)), [...SECTIONS]);
   assert.ok(empty.includes('## Deviations\n\nNone.\n') && empty.includes('Measured: no nominee.') && empty.includes('Deviations from the protocol. Measured: none.'));
-  assert.ok(empty.includes('no setting among the 920 searched was confirmed on these windows at these costs.'));
+  // Nothing eligible says so, rather than describing ten highest-scoring settings that did not exist (study3
+  // finding 6); with eligible settings and no nominee the sentence about the ten stands.
+  assert.ok(empty.includes(`Measured: no nominee. No setting was eligible (at least ${R.protocol.windows.minValidDesignWindows} valid design ` +
+    'windows and a fill in at least half of them), so no family had a setting to nominate'));
+  const unqualified = renderResults({...R, banner: [], deviations: [], nominees: [], comparisonAccount: alone});
+  assert.ok(R.pooled.eligible > 0 && unqualified.includes('Measured: no nominee. No family had a setting among its ten highest-scoring distinct settings'));
+  // Receipts are called the exchange's only for the complete exchange store, whose every receipt names it (study3
+  // finding 3: a loopback store run with --allow-incomplete-store was described as exchange responses).
+  const withStore = exchange => renderResults({...R, data: {...R.data, completeExchangeStore: exchange,
+    receipts: {BTC: {files: 1, receipts: 2, sha256: {'2020-01': 'a'.repeat(64)}}},
+    manifest: {assets: {BTC: {months: {'2020-01': {rows: 3, receipts: 2, sha256: 'b'.repeat(64)}}}}},
+    completeness: {emptyResponseMonths: [], lastBucketMissingMonths: [], rowsByMonth: {BTC: {'2020-01': 3}}}}});
+  const [exchangeStore, otherStore] = [true, false].map(withStore);
+  assert.ok(exchangeStore.includes('receipts, one per stored exchange response: BTC 2 receipts in 1 files.') &&
+    exchangeStore.includes('months with an exchange answer that held no row'));
+  assert.ok(otherStore.includes('receipts, one per stored response: BTC 2 receipts in 1 files.') &&
+    otherStore.includes('months with an answer that held no row') && !otherStore.includes('exchange response') && !otherStore.includes('exchange answer'));
+  assert.ok(empty.includes('- Measured: none of the 920 settings this run searched was confirmed on these windows at these costs.\n'));
+  assert.ok(empty.includes('Measured: this run searched 920 settings on 10 design windows and ran 0 nominees on 10 confirmation windows; none of the 920 ' +
+    'settings it searched was confirmed on these windows at these costs.\n'));
+  assert.ok(empty.includes(`Measured: there is no nominee, so there is no k and no bar: the numbers above stand alone (at least 8 valid windows: yes (9); ` +
+    `mean above 0: yes (+${R.comparisonAccount.mean.toFixed(3)}%); confirmation p-value ${pValue(R.comparisonAccount.p)}).`));
   assert.ok(empty.includes('| all | 920 | 0 | ') && empty.includes('| n/a | none | n/a | n/a | n/a | n/a |'));
+  assert.deepEqual(labelsAlone(empty), []);
+  // When the protocol's tables were measured with another research/stats.mjs, the status block says so in bold, and
+  // the summary in a line of its own; when that is not known, both say that.
+  const other = {...R.calibration, statsSha256: '0'.repeat(64), measuredWithTheStatsThatRan: false};
+  const unknown = {...R.calibration, sha256: null, statsSha256: null, measuredWithTheStatsThatRan: null};
+  const [differs, notKnown] = [other, unknown].map(calibration => [renderResults({...R, calibration}), summaryText({...R, calibration})]);
+  const sentence = `The protocol's tables were measured with another version of research/stats.mjs than the one that ran: research/calibration.json names ` +
+    `SHA-256 0000000000000000..., the research/stats.mjs that ran has ${R.calibration.statsSha256ThatRan.slice(0, 16)}...`;
+  assert.deepEqual(calibrationNote(other), [sentence]);
+  assert.ok(differs[0].includes(`; the same: no. **${sentence}**\n`) && differs[1].includes(`\n${sentence}\n`));
+  assert.ok(notKnown[0].includes('SHA-256 none (no such file), says the protocol\'s two tables were measured with `research/stats.mjs` SHA-256 unknown') &&
+    notKnown[0].includes('the same: unknown. **Which version of research/stats.mjs the protocol\'s tables were measured with is not known: ' +
+    'research/calibration.json is missing or names none.**') && notKnown[1].includes('\nWhich version of research/stats.mjs'));
+  assert.deepEqual(calibrationNote({...R.calibration, measuredWithTheStatsThatRan: true}), []);
 });
 
 test('a close after 2025-09-30T00:00:00Z is refused whatever the source of the market', async () => {
@@ -1088,11 +1610,33 @@ test('an earlier record is not replaced silently: refusal, then --overwrite with
   for (const file of [was.exploration, was.report]) assert.match(file.modifiedAt, /^20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
   assert.equal(second.results.banner.filter(line => line.startsWith('REPLACES AN EARLIER RECORD (--overwrite)')).length, 1);
   assert.equal(first.results.banner.some(line => line.startsWith('REPLACES')), false);
+  // Finding 16: what the replaced record said of itself is kept (its banner lines and its data source), and the
+  // banner says what was replaced, here a dry run, which is not a run on the candle store. The first version of this
+  // test expected "so this is not the first look at the confirmation windows" whatever had been replaced.
+  assert.deepEqual(was.record, {format: 'paper-trail-exploration-v3', banner: first.results.banner, dataSource: first.results.data.source});
+  const what = 'the replaced record was a dry run on an in-memory market supplied by its caller (its banner: DRY RUN, CHANGED FROM THE PROTOCOL), ' +
+    'not a run on the candle store';
+  const replacing = run => run.results.banner.find(line => line.startsWith('REPLACES AN EARLIER RECORD'));
+  assert.equal(replacing(second), `REPLACES AN EARLIER RECORD (--overwrite): ${what}. The replaced files are identified under previousRun.`);
   const deviation = second.results.deviations.find(d => d.option === 'overwrite');
-  assert.match(deviation.reason, /An earlier record was replaced, so this is not the first look at the confirmation windows/);
+  assert.equal(deviation.reason, `The caller passed --overwrite. An earlier record was replaced: ${what}. Its SHA-256 and modification time are under previousRun.`);
   assert.ok(second.report.includes(`the earlier exploration file was replaced (SHA-256 \`${sha256Hex(before.json)}\``));
   assert.ok(second.report.includes(`the earlier report file was replaced (SHA-256 \`${sha256Hex(before.report)}\``));
+  assert.ok(second.report.includes(`; the replaced exploration.json recorded the data source "${first.results.data.source}" and the banner "DRY RUN", ` +
+    '"CHANGED FROM THE PROTOCOL". Only the two output paths are checked for an earlier record'));
   assert.deepEqual([readFileSync(second.path, 'utf8') === before.json.toString(), JSON.parse(readFileSync(second.path, 'utf8')).previousRun], [false, was]);
+  // A replaced exploration.json that is not a record of this study, and a report alone, are each counted as an
+  // earlier look, since nothing says otherwise.
+  writeFileSync(second.path, '{"not": "a record"}\n');
+  const third = await run({overwrite: true});
+  assert.deepEqual([third.results.previousRun.record, replacing(third)], [null, 'REPLACES AN EARLIER RECORD (--overwrite): the replaced ' +
+    'exploration.json could not be read as a record of this study, so it is counted as an earlier look at the confirmation windows. The replaced ' +
+    'files are identified under previousRun.']);
+  rmSync(third.path);
+  const fourth = await run({overwrite: true});
+  assert.deepEqual([fourth.results.previousRun.exploration, fourth.results.previousRun.record], [null, null]);
+  assert.match(replacing(fourth), /^REPLACES AN EARLIER RECORD \(--overwrite\): only a report was there, with no exploration\.json to say what it recorded, so it is counted as an earlier look/);
+  assert.ok(fourth.report.includes('; what the replaced files recorded could not be read from an exploration.json. Only the two output paths are checked'));
   // A record that appears while a study runs (another run finishing first) is not replaced either: both paths are
   // looked at again before anything is written.
   const late = scratch(), there = join(late, 'RESULTS.md');
@@ -1100,8 +1644,8 @@ test('an earlier record is not replaced silently: refusal, then --overwrite with
   await assert.rejects(run({out: late, report: there, log: appear}), /A record appeared while the study ran \(.*RESULTS\.md\); nothing was written/);
   assert.deepEqual([readFileSync(there, 'utf8'), existsSync(join(late, 'exploration.json'))], ['another run\'s report\n', false]);
   // The option given where nothing exists replaces nothing, and says so.
-  const fresh = scratch(), third = await run({out: fresh, report: join(fresh, 'RESULTS.md'), overwrite: true});
-  assert.deepEqual([third.results.previousRun, third.results.deviations.find(d => d.option === 'overwrite').reason.includes('It changed nothing')], [null, true]);
+  const fresh = scratch(), nothing = await run({out: fresh, report: join(fresh, 'RESULTS.md'), overwrite: true});
+  assert.deepEqual([nothing.results.previousRun, nothing.results.deviations.find(d => d.option === 'overwrite').reason.includes('It changed nothing')], [null, true]);
 });
 
 test('the modules that ran are identified: hashes, state against the commit, and the engine against commit 6f6b693', async () => {
@@ -1148,64 +1692,126 @@ test('the modules that ran are identified: hashes, state against the commit, and
   assert.deepEqual([changed, existsSync(join(dir, 'exploration.json')), existsSync(join(dir, 'RESULTS.md'))], [true, false, false]);
 });
 
-// A candle store in the on-disk format of research/dataset.mjs (what research/fetch-candles.mjs writes), filled
-// from a synthetic market or left without rows: one .f64 file and one receipts file per asset and UTC month of
-// the bucket start, every month of the exploration range, each bound in the manifest. `source` is the label a
-// fetch from the exchange carries unless a test says otherwise; `skip` leaves months out, `partial` cuts them short.
-function writeStore(dir, market, {source = SOURCE, skip = () => false, partial = () => false} = {}) {
-  const assets = {};
-  for (const asset of ASSETS) {
-    const {time, close} = market?.[asset] ?? {time: [], close: []}, months = new Map(explorationMonths().map(month => [month, []]));
-    time.forEach((t, i) => months.get(monthKey(t - MINUTE)).push(i));
-    assets[asset] = {months: {}};
-    for (const [month, rows] of months) {
-      if (skip(asset, month)) continue;
-      const bytes = Buffer.alloc(rows.length * 48), files = monthPaths(dir, asset, month), [start, end] = monthRange(month);
-      rows.forEach((i, at) => [time[i], close[i], close[i], close[i], close[i], 1].forEach((value, k) => bytes.writeDoubleLE(value, at * 48 + k * 8)));
-      const receipts = Buffer.from(`${JSON.stringify({url: 'synthetic', receivedAt: 0, httpDate: null, sha256: sha256Hex(bytes), rowCount: rows.length, attempts: 1})}\n`);
-      for (const [path, content] of [[files.candles, bytes], [files.receipts, receipts]]) { mkdirSync(dirname(path), {recursive: true}); writeFileSync(path, content); }
-      const to = Math.min(end, RESERVED_FROM) - (partial(asset, month) ? DAY : 0);
-      assets[asset].months[month] = {rows: rows.length, firstClose: rows.length ? time[rows[0]] : null, lastClose: rows.length ? time[rows.at(-1)] : null,
-        sha256: sha256Hex(bytes), requests: 1, receipts: 1, receiptsSha256: sha256Hex(receipts), emptyResponses: rows.length ? 0 : 1, lastBucketPresent: false,
-        fetchedAt: '2026-01-01T00:00:00.000Z', complete: true, from: new Date(Math.max(start, EXPLORATION_FROM)).toISOString(), to: new Date(to).toISOString(), duplicateRows: 0};
-    }
-  }
-  writeFileSync(manifestPath(dir), JSON.stringify({format: STORE_FORMAT, source, bounds: manifestBounds(), assets}));
+// Candle stores for the tests, written by research/fetch-candles.mjs itself through research/test-store.mjs: a stub
+// answers its requests, nothing is contacted, and the receipts are dated and name the origin a fetch of that label
+// names. (The first version of this file wrote stores by hand, one receipt a month with the url "synthetic" and no
+// HTTP date; research/dataset.mjs now rightly refuses such receipts.) `rowsFor` gives each asset and month its rows,
+// by default one row at the month's first minute: every month then holds a row, and every window is below the
+// coverage floor, which is all a test of the refusals needs.
+const firstMinute = (asset, month) => [[Math.max(monthRange(month)[0], EXPLORATION_FROM) + MINUTE, 10, 10, 10, 10, 1]];
+// A market's rows, each month's own (by bucket start), or the first minute where the market has none.
+const marketRows = market => (asset, month) => {
+  const {time, close} = market[asset], [start, end] = monthRange(month), rows = [];
+  for (let i = lowerBound(time, start + MINUTE); i < time.length && time[i] <= end; i++) rows.push([time[i], close[i], close[i], close[i], close[i], 1]);
+  return rows.length ? rows : firstMinute(asset, month);
+};
+function testStore(dir, {rowsFor = firstMinute, source = SOURCE, ...more} = {}) {
+  writeTestStore(dir, {rowsFor, source, ...more});
   return dir;
 }
+// Two whole stores, written once each and copied where a test changes one: the exchange's, which is the
+// protocol's store, and one fetched from a loopback test server (complete, and not the exchange's).
+const STORES = {};
+const storeCopy = (source = SOURCE) => {
+  STORES[source] ??= testStore(scratch(), {source});
+  const dir = scratch();
+  cpSync(STORES[source], dir, {recursive: true});
+  return dir;
+};
 
-test('the store is checked before anything else: an incomplete or non-exchange store is refused with what is missing', async () => {
-  // Stores without rows: what is checked is the manifest, month by month, and nothing is simulated.
-  const complete = writeStore(scratch()), other = writeStore(scratch(), null, {source: 'Loopback test server: synthetic candles, not market data'});
-  const short = writeStore(scratch(), null, {skip: (asset, month) => month >= '2020-07' && (asset === 'LINK' || month >= '2021-01'), partial: (asset, month) => asset === 'BTC' && month === '2020-03'});
-  assert.deepEqual([storeCompleteness(complete), storeCompleteness(other).sourceIsExchange, storeCompleteness(short).problems.length],
-    [{complete: true, source: SOURCE, sourceIsExchange: true, problems: []}, false, 1 + 57 + 63]);
+test('the store is checked before anything else: only a usable store passes; empty months, stray files and other labels are refused', async () => {
   const run = (data, more = {}) => runStudy({data, out: null, workers: 0, ...more});
-  // 6 of 69 months for LINK and 12 for BTC, one of them fetched for part of its range: refused, with the count and
-  // the first problems by name (the first review's F1: such a store ran and the record said "Deviations: none").
+  // An honest store: every month of both assets fetched (through a stub) from the exchange's host, each holding a
+  // row, the receipts dated. It is usable, and the study goes past the store.
+  const honest = storeCopy(), checked = storeCompleteness(honest);
+  assert.deepEqual([checked.complete, checked.sourceIsExchange, checked.usable, checked.problems], [true, true, true, []]);
+  const passed = await run(honest, {allowUncommitted: true, settings: SEARCHED.slice(0, 4)});
+  assert.deepEqual([passed.results.data.completeExchangeStore, passed.results.data.completeness.usable, passed.results.banner.filter(line => line.startsWith('NOT A PROTOCOL RUN'))],
+    [true, true, []]);
+  assert.deepEqual(passed.results.data.completeness, plain({...checked, source: undefined}));
+
+  // A store missing months: BTC fetched for 2020 only and LINK for its first half, 120 of the 138 asset-months
+  // missing. Refused with the count and the first problems by name, each with what repairs it (the first review's
+  // F1: such a store ran and the record said "Deviations: none").
+  const short = testStore(scratch(), {months: explorationMonths().filter(month => month < '2021-01'), assets: ['BTC']});
+  testStore(short, {months: explorationMonths().filter(month => month < '2020-07'), assets: ['LINK']});
   await assert.rejects(run(short), error => {
-    assert.match(error.message, /^The study runs only on the complete exchange store \(research\/PROTOCOL\.md, Data boundary\)\. This store is not it: 121 of the 138 asset-months from 2020-01 to 2025-09 are missing, partial or do not verify\./);
-    assert.match(error.message, /BTC 2020-03: stored for 2020-03-01T00:00:00\.000Z to 2020-03-31T00:00:00\.000Z, which does not cover the whole month/);
-    assert.match(error.message, /\n  BTC 2021-01: missing: the manifest has no entry for this month\n[^]*\n  and 113 more\nFetch what is missing with research\/fetch-candles\.mjs, or pass --allow-incomplete-store/);
-    assert.equal(error.message.split('\n').length, 11, 'one line for the store, eight problems by name, how many more, and what to do');
+    const lines = error.message.split('\n');
+    assert.equal(lines[0], 'The study runs only on the complete exchange store (research/PROTOCOL.md, Data boundary). This store is not it: 120 of the 138 ' +
+      'asset-months from 2020-01 to 2025-09 are missing, incomplete, without a row, or not borne out by their own files and receipts.');
+    assert.deepEqual(lines.slice(1, 3), ['  BTC 2021-01: missing: the manifest has no entry for this month; run research/fetch-candles.mjs again',
+      '  BTC 2021-02: missing: the manifest has no entry for this month; run research/fetch-candles.mjs again']);
+    assert.deepEqual(lines.slice(9), ['  and 112 more', 'Each problem ends with what repairs it: research/fetch-candles.mjs writes .research-data unless it is ' +
+      'given --dir with the directory this run was given as --data.', 'Or pass --allow-incomplete-store: the run is then marked at its top as not a run on ' +
+      'the complete exchange store']);
     return true;
   });
-  // A store whose source is not the exchange is refused although every month is there (F3).
-  await assert.rejects(run(other), /This store is not it: its source is "Loopback test server: synthetic candles, not market data", not the exchange \("Coinbase Exchange public completed one-minute candles/);
+  // Amendment 2: "A month that holds no row for an asset is not complete." One month without a row (every answer
+  // empty, as in an exchange outage) is enough.
+  const empty = storeCopy();
+  testStore(empty, {months: ['2023-04'], assets: ['LINK'], rowsFor: () => []});
+  await assert.rejects(run(empty), error => {
+    assert.deepEqual(error.message.split('\n').slice(0, 2), ['The study runs only on the complete exchange store (research/PROTOCOL.md, Data boundary). This store ' +
+      'is not it: 1 of the 138 asset-months from 2020-01 to 2025-09 are missing, incomplete, without a row, or not borne out by their own files and receipts.',
+      '  LINK 2023-04: holds no row; delete candles/LINK/2023-04.f64 in the store directory and run research/fetch-candles.mjs again']);
+    return true;
+  });
+  // A stray file is not an asset-month: it is counted and named as a file (with its path, not as an asset and month).
+  const stray = storeCopy();
+  writeFileSync(join(stray, 'candles', 'BTC', '2020-03.f64.bak'), 'a copy\n');
+  await assert.rejects(run(stray), error => {
+    assert.deepEqual(error.message.split('\n').slice(0, 2), ['The study runs only on the complete exchange store (research/PROTOCOL.md, Data boundary). This store ' +
+      'is not it: 1 file or link in its directory is named by no manifest entry.', '  not in the manifest: candles/BTC/2020-03.f64.bak is in the store ' +
+      'directory and no manifest entry names it; delete it or move it out of the store directory']);
+    assert.doesNotMatch(error.message, /asset-month|BTC 2020-03/);
+    // No fetch repairs a stray file, so the fetcher's --dir is not offered as what repairs it (study3 finding 7).
+    assert.equal(error.message.split('\n')[2], 'Each problem ends with what repairs it.');
+    assert.doesNotMatch(error.message, /fetch-candles/);
+    return true;
+  });
+  // More problems than there are asset-months: 120 missing months, an entry for a month outside the range and 20
+  // stray files are 141 problems, each kind counted as what it is.
+  const crowded = scratch();
+  cpSync(short, crowded, {recursive: true});
+  const manifest = JSON.parse(readFileSync(manifestPath(crowded), 'utf8'));
+  manifest.assets.BTC.months['2025-10'] = manifest.assets.BTC.months['2020-01'];
+  writeFileSync(manifestPath(crowded), JSON.stringify(manifest));
+  for (let i = 0; i < 20; i++) writeFileSync(join(crowded, `notes-${String(i).padStart(2, '0')}.txt`), 'a note\n');
+  await assert.rejects(run(crowded), error => {
+    assert.ok(error.message.startsWith('The study runs only on the complete exchange store (research/PROTOCOL.md, Data boundary). This store is not it: 120 of the ' +
+      '138 asset-months from 2020-01 to 2025-09 are missing, incomplete, without a row, or not borne out by their own files and receipts; its manifest has 1 ' +
+      'entry for months outside 2020-01 to 2025-09; 20 files or links in its directory are named by no manifest entry.\n'), error.message);
+    // Eight named and 133 more: 141 problems, not described as asset-months.
+    assert.ok(error.message.includes('\n  and 133 more\n') && !/141 of|of the 141/.test(error.message));
+    return true;
+  });
+  // A store whose label is not the exchange's is refused although every month is there (F3), and fetching into it
+  // would not change that.
+  const other = storeCopy(LOOPBACK_SOURCE);
+  const labelled = storeCompleteness(other);
+  assert.deepEqual([labelled.complete, labelled.usable], [true, false]);
+  await assert.rejects(run(other), error => {
+    assert.equal(error.message, 'The study runs only on the complete exchange store (research/PROTOCOL.md, Data boundary). This store is not it: its source is ' +
+      `"${LOOPBACK_SOURCE}", not the exchange ("${SOURCE}").\nA store with another label is not made the exchange store by fetching into it: ` +
+      'research/fetch-candles.mjs fetches from the exchange into a directory of its own.\nOr pass --allow-incomplete-store: the run is then marked at its top ' +
+      'as not a run on the complete exchange store');
+    return true;
+  });
   // No store at all, and options that are not an explicit permission, change nothing.
   await assert.rejects(run(scratch()), /no manifest; fetch with research\/fetch-candles\.mjs first/);
   await assert.rejects(run(short, {overwrite: true, allowUncommitted: true}), /The study runs only on the complete exchange store/);
   // The store is looked at first: before the settings are simulated, before git is asked, before a record is written.
   const out = scratch();
-  await assert.rejects(runStudy({data: short, out, report: join(out, 'RESULTS.md'), workers: 0}), /The study runs only on the complete exchange store/);
+  await assert.rejects(runStudy({data: empty, out, report: join(out, 'RESULTS.md'), workers: 0}), /The study runs only on the complete exchange store/);
   assert.deepEqual([existsSync(join(out, 'exploration.json')), existsSync(join(out, 'RESULTS.md'))], [false, false]);
 });
 
 // The repository's study, copied to a directory of its own and committed there: the modules that run, the
-// protocol text and nothing else. A run from this copy has a git state this test controls, whatever the state of
-// the working tree the tests themselves run from.
+// protocol text, the measurement behind its tables (research/calibration.json, which the study reads and hashes)
+// and nothing else. A run from this copy has a git state this test controls, whatever the state of the working
+// tree the tests themselves run from.
 function committedCopy({leaveUntracked = []} = {}) {
-  const repo = scratch(), files = [...MODULES, 'research/PROTOCOL.md'];
+  const repo = scratch(), files = [...MODULES, 'research/PROTOCOL.md', 'research/calibration.json'];
   for (const file of files) { mkdirSync(dirname(join(repo, file)), {recursive: true}); copyFileSync(join(ROOT, file), join(repo, file)); }
   const git = (...args) => execFileSync('git', args, {cwd: repo, stdio: ['ignore', 'pipe', 'pipe']});
   git('init', '-q');
@@ -1231,10 +1837,15 @@ test('the command line on a complete store: one command writes exploration.json 
   assert.equal(existsSync(join(nowhere, 'research')), false);
 
   // A working directory holding .research-data: a store with every month of 2020-01 to 2025-09 for both assets,
-  // labelled as the exchange's, of which the first 56 days hold synthetic prices and the rest hold no rows (a
-  // complete store by its manifest; windows 0 and 1 are valid, the other 72 are below the coverage floor).
+  // written by the fetcher through a stub on the exchange's host, of which the first 56 days hold synthetic prices
+  // and every later month one row at its first minute (a usable store: every month holds a row; windows 0 and 1 are
+  // valid, the other 72 are below the coverage floor). The first version of this test left the later months without
+  // a row; Amendment 2 refuses such a store.
   const cwd = scratch(), few = {missing: 0.004, gapRate: 0.0005, longGapRate: 0};
-  const store = writeStore(join(cwd, '.research-data'), syntheticMarket({seed: 9, start: EXPLORATION_FROM + MINUTE, minutes: 56 * 1440 - 1, BTC: few, LINK: few}));
+  const store = testStore(join(cwd, '.research-data'), {rowsFor: marketRows(syntheticMarket({seed: 9, start: EXPLORATION_FROM + MINUTE,
+    minutes: 56 * 1440 - 1, BTC: few, LINK: few}))});
+  const checked = storeCompleteness(store);
+  assert.equal(checked.usable, true);
   const done = run(cwd);   // no flag at all: the protocol's own run
   assert.equal(done.status, 0, done.stderr);
   const written = readFileSync(join(cwd, 'research', 'results', 'exploration.json')), results = JSON.parse(written.toString());
@@ -1248,20 +1859,40 @@ test('the command line on a complete store: one command writes exploration.json 
   assert.ok(report.includes('## Deviations\n\nNone.\n') && report.includes('Deviations from the protocol. Measured: none.'));
   assert.equal(report, renderResults(results));
   assert.deepEqual(report.split('\n').filter(line => line.startsWith('## ')).map(line => line.slice(3)), [...SECTIONS]);
-  assert.doesNotMatch(`${done.stdout}${report}`, RESERVED);
-  // The data: the manifest's own source, the completeness check, the manifest hash and the receipts on disk.
+  assert.doesNotMatch(`${done.stdout}${unquoted(report)}`, RESERVED);
+  // The data: the manifest's own source, the completeness check with its lists, the manifest hash and the receipts
+  // on disk.
   assert.deepEqual([results.data.source, results.data.kind, results.data.completeExchangeStore, results.data.completeness],
-    [SOURCE, 'candle store (research/fetch-candles.mjs)', true, {complete: true, sourceIsExchange: true, problems: []}]);
+    [SOURCE, 'candle store (research/fetch-candles.mjs)', true, plain({...checked, source: undefined})]);
+  assert.deepEqual(Object.keys(results.data.completeness), ['complete', 'sourceIsExchange', 'usable', 'problems', 'emptyResponseMonths',
+    'lastBucketMissingMonths', 'rowsByMonth']);
   assert.equal(results.data.manifestSha256, sha256Hex(readFileSync(manifestPath(store))));
   assert.deepEqual(Object.keys(results.data.manifest.assets.BTC.months), explorationMonths());
-  assert.deepEqual([results.data.receipts.BTC.files, results.data.receipts.BTC.receipts, results.data.receipts.LINK.files, Object.keys(results.data.receipts.LINK.sha256).length], [69, 69, 69, 69]);
+  const requests = explorationMonths().reduce((sum, month) => sum + Math.ceil((Math.min(monthRange(month)[1], RESERVED_FROM) - Math.max(monthRange(month)[0], EXPLORATION_FROM)) / (299 * MINUTE)), 0);
+  assert.deepEqual([results.data.receipts.BTC.files, results.data.receipts.BTC.receipts, results.data.receipts.LINK.files, results.data.receipts.LINK.receipts],
+    [69, requests, 69, requests]);
   assert.equal(results.data.receipts.BTC.sha256['2020-02'], sha256Hex(readFileSync(monthPaths(store, 'BTC', '2020-02').receipts)));
-  assert.ok(report.includes('receipts, one per stored exchange response: BTC 69 receipts in 69 files, LINK 69 receipts in 69 files. Months with an exchange answer that ' +
-    'held no row: BTC 67 (2020-03, 2020-04, 2020-05, 2020-06, ...); LINK 67 (2020-03, 2020-04, 2020-05, 2020-06, ...). Months whose last wanted minute did not come back: BTC 69 (2020-01, '));
-  assert.ok(report.includes(`| 2020-02 | ${results.data.manifest.assets.BTC.months['2020-02'].rows.toLocaleString('en-US')} | 1 | \`${results.data.manifest.assets.BTC.months['2020-02'].sha256.slice(0, 16)}\` | ` +
+  // RESULTS.md lists, from the store's own records, the months with empty answers, those whose last bucket did not
+  // come back and those without a row, and says what "fetched from the exchange" rests on (finding 14).
+  const listed = entries => ASSETS.map(asset => {
+    const months = entries.filter(entry => entry.asset === asset).map(entry => entry.month);
+    return `${asset} ${months.length ? `${months.length} (${months.join(', ')})` : 'none'}`;
+  }).join('; ');
+  assert.ok(checked.emptyResponseMonths.length > 100 && checked.lastBucketMissingMonths.length > 100);
+  assert.ok(report.includes(`receipts, one per stored exchange response: BTC ${requests.toLocaleString('en-US')} receipts in 69 files, LINK ` +
+    `${requests.toLocaleString('en-US')} receipts in 69 files.\n\nMeasured, from the store's own records: months with an exchange answer that held no row: ` +
+    `${listed(checked.emptyResponseMonths)}. Months whose last wanted minute did not come back: ${listed(checked.lastBucketMissingMonths)}. Months that hold ` +
+    'no row: BTC none; LINK none.\n\n"Fetched from the exchange" is read from the store\'s own records: the source label in its manifest and the origin ' +
+    'each receipt names. That catches accidents and cannot prove where a file came from.\n'));
+  assert.ok(report.includes('complete exchange store: yes (read from the store\'s own records, its source label and the origin each receipt names, which ' +
+    'cannot prove where a file came from); manifest SHA-256 '));
+  const february = results.data.manifest.assets.BTC.months['2020-02'];
+  assert.ok(report.includes(`| 2020-02 | ${february.rows.toLocaleString('en-US')} | ${february.receipts} | \`${february.sha256.slice(0, 16)}\` | ` +
     `\`${results.data.receipts.BTC.sha256['2020-02'].slice(0, 16)}\` | `));
   assert.equal(report.split('\n').filter(line => /^\| 20\d\d-\d\d \| /.test(line)).length, 69);
   assert.equal(results.data.firstClose.BTC, '2020-01-01T00:01:00.000Z');
+  // The protocol's tables were measured with the research/stats.mjs that ran: nothing is said about them.
+  assert.deepEqual([results.calibration.measuredWithTheStatsThatRan, done.stdout.includes('measured with another version')], [true, false]);
   // The code: the commit of the copy names every module that ran.
   assert.deepEqual([results.code.commit, results.code.allModulesCommitted, results.code.trackedFilesModified, results.code.researchModulesUntracked, results.code.problems,
     results.code.engine.equalsReference], [head, true, false, false, [], true]);
@@ -1282,7 +1913,12 @@ test('the command line on a complete store: one command writes exploration.json 
   assert.deepEqual(FAMILIES.map(f => [results.families[f].eligible, results.families[f].best, results.families[f].searchAdjusted.p, results.families[f].nomination.nominee]),
     Array(5).fill([0, null, null, null]));
   assert.deepEqual([results.nominees, results.pooled.eligible], [[], 0]);
-  assert.ok(report.includes('Measured: no nominee.') && report.includes('no setting among the 13,200 searched was confirmed on these windows at these costs.'));
+  assert.ok(report.includes('Measured: no nominee.') && report.includes('- Measured: none of the 13,200 settings this run searched was confirmed on these windows at these costs.\n'));
+  assert.ok(report.includes('Measured: no nominee. No setting was eligible (at least 40 valid design windows and a fill in at least half of them)'));
+  assert.ok(done.stdout.includes('Nominees: none. No setting was eligible (at least 40 valid design windows and a fill in at least half of them).\n'));
+  // The comparison account's own row on no window above the floor, with no nominee and so no bar.
+  assert.deepEqual([results.comparisonAccount.n, results.comparisonAccount.k, results.comparisonAccount.passed, results.comparisonAccount.perWindow], [0, 0, null, []]);
+  assert.ok(done.stdout.includes('Comparison account (half BTC, half LINK, held) on 0 confirmation windows above the coverage floor: mean n/a, confirmation p 1.0000 (no nominee, so no bar)\n'));
   assert.deepEqual([results.defaultSetting.n, results.defaultSetting.perWindow.length, results.defaultSetting.perWindow[0].invalid], [1, 74, 'insufficient warmup']);
   assert.equal(results.costHurdle.windows, 2);
 
@@ -1294,10 +1930,13 @@ test('the command line on a complete store: one command writes exploration.json 
   const replaced = run(cwd, '--overwrite', '--workers', '2');
   assert.equal(replaced.status, 0, replaced.stderr);
   const second = JSON.parse(readFileSync(join(cwd, 'research', 'results', 'exploration.json'), 'utf8'));
-  assert.match(replaced.stdout, /^REPLACES AN EARLIER RECORD \(--overwrite\)/);
+  // What was replaced was a run on the candle store: that is an earlier look at its confirmation windows.
+  assert.ok(replaced.stdout.startsWith(`REPLACES AN EARLIER RECORD (--overwrite): the replaced record was a run on a candle store (source "${SOURCE}"; its ` +
+    'banner: none), so the confirmation windows had been looked at before this run. The replaced files are identified under previousRun.\n'));
   assert.deepEqual(second.deviations.map(d => d.option), ['overwrite', 'workers']);
   assert.deepEqual([second.previousRun.exploration.path, second.previousRun.exploration.sha256, second.previousRun.report.path, second.previousRun.report.sha256],
     ['research/results/exploration.json', sha256Hex(written), 'research/RESULTS.md', sha256Hex(report)]);
+  assert.deepEqual(second.previousRun.record, {format: 'paper-trail-exploration-v3', banner: [], dataSource: SOURCE});
   // Apart from what a second run must differ in, it is the same record: the study is reproducible.
   const same = record => ({...record, timing: null, banner: null, deviations: null, previousRun: null});
   assert.deepEqual(same(second), same(results));
@@ -1308,43 +1947,53 @@ test('the command line refuses an incomplete store and uncommitted code; each ex
   const run = (...args) => spawnSync(process.execPath, [study, '--workers', '0', ...args], {encoding: 'utf8', cwd: dir});
   const target = name => ['--out', join(dir, name), '--report', join(dir, name, 'RESULTS.md')];
   const read = name => [JSON.parse(readFileSync(join(dir, name, 'exploration.json'), 'utf8')), readFileSync(join(dir, name, 'RESULTS.md'), 'utf8')];
-  // Stores without rows: every run below is a matter of the refusals, not of prices.
-  const complete = writeStore(join(dir, 'complete'));
-  const short = writeStore(join(dir, 'short'), null, {skip: (asset, month) => month >= '2025-08'});
-  const other = writeStore(join(dir, 'other'), null, {source: 'synthetic test store'});
+  // Stores of one row a month, written by the fetcher through a stub: every run below is a matter of the refusals,
+  // not of prices. (The first version wrote them by hand, with receipts research/dataset.mjs now refuses.)
+  const complete = storeCopy();
+  const short = testStore(join(dir, 'short'), {months: explorationMonths().filter(month => month < '2025-08')});
+  const other = storeCopy(LOOPBACK_SOURCE);
+  const missing = 'missing: the manifest has no entry for this month; run research/fetch-candles.mjs again';
 
   // An incomplete store: refused with what is missing; with the option it runs, and the first line of the summary
   // and of RESULTS.md says the run did NOT use the complete exchange store.
   let refused = run('--data', short, ...target('a'));
   assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /Study failed: The study runs only on the complete exchange store .*4 of the 138 asset-months.*\n  BTC 2025-08: missing: the manifest has no entry for this month\n  BTC 2025-09: missing[^]*\n  LINK 2025-09: missing/);
+  assert.ok(refused.stderr.includes('\nStudy failed: The study runs only on the complete exchange store (research/PROTOCOL.md, Data boundary). This store is not ' +
+    'it: 4 of the 138 asset-months from 2020-01 to 2025-09 are missing, incomplete, without a row, or not borne out by their own files and receipts.\n' +
+    ['BTC 2025-08', 'BTC 2025-09', 'LINK 2025-08', 'LINK 2025-09'].map(month => `  ${month}: ${missing}\n`).join('') + 'Each problem ends with what ' +
+    'repairs it: research/fetch-candles.mjs writes .research-data unless it is given --dir with the directory this run was given as --data.\nOr pass ' +
+    '--allow-incomplete-store'), refused.stderr);
   assert.equal(existsSync(join(dir, 'a')), false);
   let allowed = run('--data', short, ...target('a'), '--allow-incomplete-store');
   assert.equal(allowed.status, 0, allowed.stderr);
   let [results, report] = read('a');
   const first = 'NOT A PROTOCOL RUN: this run did NOT use the complete exchange store (--allow-incomplete-store): 4 of the 138 asset-months from 2020-01 to 2025-09 ' +
-    'are missing, partial or do not verify. Its numbers are not results of research/PROTOCOL.md.';
+    'are missing, incomplete, without a row, or not borne out by their own files and receipts. Its numbers are not results of research/PROTOCOL.md.';
   assert.deepEqual([allowed.stdout.split('\n')[0], report.split('\n')[0], results.banner], [first, `> **${first}**`, [first]]);
   assert.deepEqual(results.deviations.map(d => d.option), ['allowIncompleteStore', 'data', 'out', 'report', 'workers']);
   assert.deepEqual({...results.deviations[0], reason: null}, {option: 'allowIncompleteStore', value: true, default: false, reason: null, storeSource: SOURCE, sourceIsExchange: true,
-    problems: ['BTC', 'LINK'].flatMap(asset => ['2025-08', '2025-09'].map(month => ({asset, month, problem: 'missing: the manifest has no entry for this month'})))});
+    problems: ['BTC', 'LINK'].flatMap(asset => ['2025-08', '2025-09'].map(month => ({asset, month, problem: missing})))});
   assert.match(results.deviations[0].reason, /^The caller passed --allow-incomplete-store\. The protocol runs only on the complete exchange store, and this store is not it: 4 of the 138/);
-  assert.deepEqual([results.data.completeExchangeStore, results.data.completeness.complete, results.data.completeness.problems.length], [false, false, 4]);
+  assert.deepEqual([results.data.completeExchangeStore, results.data.completeness.complete, results.data.completeness.usable, results.data.completeness.problems.length],
+    [false, false, false, 4]);
   assert.ok(report.includes('1. **allowIncompleteStore**: `true` where the protocol\'s run has `false`. Reason: The caller passed --allow-incomplete-store.'));
-  assert.ok(report.includes('   - LINK 2025-09: missing: the manifest has no entry for this month') && report.includes('complete exchange store: no'));
+  assert.ok(report.includes(`   - LINK 2025-09: ${missing}`) && report.includes('complete exchange store: no ('));
+  // The months without a row are listed from rowsByMonth: here the four that were never fetched.
+  assert.ok(report.includes('Months that hold no row: BTC 2 (2025-08, 2025-09); LINK 2 (2025-08, 2025-09).'));
 
   // A complete store that is not the exchange's: the same refusal and the same first line.
   refused = run('--data', other, ...target('b'));
   assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /This store is not it: its source is "synthetic test store", not the exchange/);
+  assert.ok(refused.stderr.includes(`This store is not it: its source is "${LOOPBACK_SOURCE}", not the exchange`));
   allowed = run('--data', other, ...target('b'), '--allow-incomplete-store');
   assert.equal(allowed.status, 0, allowed.stderr);
   [results, report] = read('b');
-  assert.match(allowed.stdout, /^NOT A PROTOCOL RUN: this run did NOT use the complete exchange store \(--allow-incomplete-store\): its source is "synthetic test store", not the exchange/);
+  assert.ok(allowed.stdout.startsWith('NOT A PROTOCOL RUN: this run did NOT use the complete exchange store (--allow-incomplete-store): its source is ' +
+    `"${LOOPBACK_SOURCE}", not the exchange`));
   assert.match(report, /^> \*\*NOT A PROTOCOL RUN: this run did NOT use the complete exchange store/);
-  assert.deepEqual([results.data.source, results.data.completeness.sourceIsExchange, results.deviations[0].sourceIsExchange, results.deviations[0].problems], ['synthetic test store', false, false, []]);
+  assert.deepEqual([results.data.source, results.data.completeness.sourceIsExchange, results.deviations[0].sourceIsExchange, results.deviations[0].problems], [LOOPBACK_SOURCE, false, false, []]);
   assert.deepEqual([results.data.completeness.complete, results.data.completeExchangeStore], [true, false], 'every month is there, and it is still not the exchange store');
-  assert.ok(report.includes('complete exchange store: no'));
+  assert.ok(report.includes('complete exchange store: no ('));
   // The option on a store that needs none is still on record, and says that it changed nothing.
   allowed = run('--data', complete, ...target('c'), '--allow-incomplete-store', '--allow-uncommitted');
   assert.equal(allowed.status, 0, allowed.stderr);
@@ -1371,6 +2020,14 @@ test('the command line refuses an incomplete store and uncommitted code; each ex
     problems: ['research/stats.mjs is modified']});
   assert.ok(report.includes('every module that ran is committed at that commit: no; tracked files modified anywhere in the repository: yes; research modules untracked: no'));
   assert.ok(report.includes('| `research/stats.mjs` | `' + sha256Hex(readFileSync(join(repo, 'research', 'stats.mjs'))) + '` | modified |'));
+  // research/calibration.json names the research/stats.mjs the protocol's tables were measured with, and that is no
+  // longer the one that ran: the record says so, and so do the status block of RESULTS.md and the printed summary.
+  const calibration = readFileSync(join(repo, 'research', 'calibration.json'));
+  assert.deepEqual(results.calibration, {file: 'research/calibration.json', sha256: sha256Hex(calibration), statsSha256: JSON.parse(calibration).statsSha256,
+    statsSha256ThatRan: sha256Hex(readFileSync(join(repo, 'research', 'stats.mjs'))), measuredWithTheStatsThatRan: false});
+  const [note] = calibrationNote(results.calibration);
+  assert.ok(note.startsWith('The protocol\'s tables were measured with another version of research/stats.mjs than the one that ran'));
+  assert.ok(report.includes(`; the same: no. **${note}**\n`) && allowed.stdout.includes(`\n${note}\n`));
 
   // The protocol text is part of what the commit must name: its hash is in the record.
   appendFileSync(join(repo, 'research', 'PROTOCOL.md'), '\nA sentence added after the commit.\n');
@@ -1412,8 +2069,10 @@ test('full-size dry run on a synthetic market (opt-in)', {skip: !process.env.STU
   assert.ok(results.nominees.length <= 5 && results.nominees.every(n => LABELS.includes(n.confirmation.label)));
   assert.ok(bytes < 2.5e6, `${bytes} bytes`);
   assert.match(report, /^> \*\*DRY RUN: this run did NOT use the complete exchange store\./);
+  // At full size too, no label is printed without its buy-and-hold reading, and the comparison account has its row.
+  assert.deepEqual([labelsAlone(report), labelsAlone(summaryText(results)), results.comparisonAccount.k], [[], [], results.nominees.length]);
   t.diagnostic(`full-size dry run: ${results.designGrid.simulations} design simulations in ${results.timing.steps.designGrid.toFixed(1)} s on ` +
     `${results.timing.workers} workers; scores and search-adjusted p-values ${results.timing.steps.scores.toFixed(1)} s; engine reruns ` +
     `${results.timing.steps.exactCheck.toFixed(1)} s; whole study ${results.timing.wallSeconds.toFixed(1)} s; exploration.json ${(bytes / 1e6).toFixed(2)} MB; ` +
-    `nominees ${results.nominees.map(n => `${n.id} ${n.confirmation.label}`).join(', ') || 'none'}`);
+    `nominees ${results.nominees.map(n => `${n.id} ${n.confirmation.labelWithReading}`).join(', ') || 'none'}`);
 });

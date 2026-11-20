@@ -119,26 +119,32 @@ function requireManifest(dir) {
   return manifest;
 }
 
+// What repairs a manifest that cannot be read: without one, the fetcher fetches every month anew and writes a new one.
+export const REMAKE_MANIFEST = '; move manifest.json out of the store directory and run research/fetch-candles.mjs again, ' +
+  'which then fetches every month anew';
+
 // The parsed manifest, or null when the directory has none. A manifest of another format, or one written under
-// other bounds, is refused rather than read.
+// other bounds, is refused rather than read. Every refusal names the manifest and ends with REMAKE_MANIFEST: the
+// fetcher reads the manifest first and refuses the same way, so running it again alone repairs nothing.
 export function readManifest(dir = DEFAULT_DIR) {
   const path = manifestPath(dir);
   if (!existsSync(path)) return null;
+  const refuse = text => { throw new Error(`${path}: ${text}${REMAKE_MANIFEST}`); };
   let manifest;
   try { manifest = JSON.parse(readFileSync(path, 'utf8')); }
-  catch (error) { throw new Error(`${path}: unreadable manifest (${error.message})`); }
+  catch (error) { refuse(`unreadable manifest (${error.message})`); }
   const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const bounds = manifestBounds();
-  if (!plain(manifest) || manifest.format !== FORMAT) throw new Error(`${path}: not a ${FORMAT} manifest`);
+  if (!plain(manifest) || manifest.format !== FORMAT) refuse(`not a ${FORMAT} manifest`);
   if (manifest.bounds?.from !== bounds.from || manifest.bounds?.to !== bounds.to)
-    throw new Error(`${path}: written under other bounds than [${bounds.from}, ${bounds.to}); refused`);
-  if (typeof manifest.source !== 'string' || !plain(manifest.assets)) throw new Error(`${path}: incomplete manifest`);
+    refuse(`written under other bounds than [${bounds.from}, ${bounds.to}); refused`);
+  if (typeof manifest.source !== 'string' || !plain(manifest.assets)) refuse('incomplete manifest');
   for (const [asset, block] of Object.entries(manifest.assets)) {
-    assertAsset(asset);
-    if (!plain(block) || !plain(block.months)) throw new Error(`${path}: ${asset} has no months block`);
+    if (!ASSETS.includes(asset)) refuse(`Unknown asset: ${asset}`);
+    if (!plain(block) || !plain(block.months)) refuse(`${asset} has no months block`);
     for (const [month, entry] of Object.entries(block.months)) {
-      monthRange(month);
-      if (!plain(entry)) throw new Error(`${path}: ${asset} ${month} is not an entry`);
+      try { monthRange(month); } catch (error) { refuse(error.message); }
+      if (!plain(entry)) refuse(`${asset} ${month} is not an entry`);
     }
   }
   return manifest;
@@ -293,24 +299,68 @@ function receiptRequest(url, asset) {
   return {origin: parsed.origin, loopback: parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname), start, end};
 }
 
+// HTTP dates, RFC 9110 section 5.6.7. A sender writes an IMF-fixdate, "Sun, 06 Nov 1994 08:49:37 GMT"; a recipient
+// must also accept the two obsolete forms, the RFC 850 date "Sunday, 06-Nov-94 08:49:37 GMT" and the asctime date
+// "Sun Nov  6 08:49:37 1994". Day and month names are case-sensitive, and seconds run to 60 (a leap second).
+const MONTH_NAME = '(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)', TIME_OF_DAY = '(\\d{2}):(\\d{2}):(\\d{2})';
+const MONTH_NAMES = MONTH_NAME.slice(1, -1).split('|');
+const HTTP_DATE_FORMS = [   // each form's pattern, and how a match of it gives [year, month name, day, hour, minute, second]
+  [new RegExp(`(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\\d{2}) ${MONTH_NAME} (\\d{4}) ${TIME_OF_DAY} GMT`, 'g'), m => [m[3], m[2], m[1], m[4], m[5], m[6]]],
+  [new RegExp(`(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\\d{2})-${MONTH_NAME}-(\\d{2}) ${TIME_OF_DAY} GMT`, 'g'),
+    m => [m[3], m[2], m[1], m[4], m[5], m[6]]],
+  [new RegExp(`(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) ${MONTH_NAME} (\\d{2}| \\d) ${TIME_OF_DAY} (\\d{4})`, 'g'), m => [m[6], m[1], m[2], m[3], m[4], m[5]]]
+];
+
+// Every HTTP date in a text, in milliseconds: the IMF-fixdates in text order, then the RFC 850 dates, then the
+// asctime dates; [] for anything that is not a text. Found by pattern anywhere in the text, so that two Date header
+// lines, which fetch joins with ", ", give two dates. A day that is not on the calendar (31 Feb) is no date. An RFC
+// 850 date's two-digit year is read as RFC 9110 says, against `now` (milliseconds): the latest year ending in those
+// digits that is at most 50 years after now's year (none without a valid `now`).
+export function httpDates(text, now) {
+  if (typeof text !== 'string') return [];
+  const dates = [], nowYear = new Date(now).getUTCFullYear();
+  for (const [pattern, fieldsOf] of HTTP_DATE_FORMS) for (const match of text.matchAll(pattern)) {
+    const [yearText, monthName, ...clock] = fieldsOf(match), [day, hour, minute, second] = clock.map(Number), month = MONTH_NAMES.indexOf(monthName);
+    let year = Number(yearText);
+    if (yearText.length === 2) { year += Math.floor(nowYear / 100) * 100; if (year > nowYear + 50) year -= 100; }
+    // A day past the month's end (or 00) rolls into another month, and Date.UTC reads a year below 100 as 19xx.
+    const midnight = new Date(Date.UTC(year, month, day));
+    if (hour > 23 || minute > 59 || second > 60 || midnight.getUTCFullYear() !== year || midnight.getUTCMonth() !== month) continue;
+    dates.push(Date.UTC(year, month, day, hour, minute, second));
+  }
+  return dates;
+}
+
+// An answer about a minute is not given before that minute has ended. A receipt is dated when its httpDate holds an
+// HTTP date (httpDates) later than the close of the last bucket its request asks for, and its receivedAt is later
+// than that close as well. Stated once: storeCompleteness asks it of every receipt in a store labelled as fetched
+// from the exchange, and the fetcher warns, on the exchange's host, when an answer is not dated.
+export function receiptDated(receipt, lastBucketStart) {
+  const close = lastBucketStart + MINUTE;
+  return Number.isSafeInteger(receipt?.receivedAt) && receipt.receivedAt > close &&
+    httpDates(receipt.httpDate, receipt.receivedAt).some(date => date > close);
+}
+
 // PROTOCOL.md, Data boundary: '"Fetched from the exchange" is read from the store's own records (its source label
 // and the request receipts bound to each month); that catches accidents and cannot prove where a file came from.'
-// What one month's bound receipts say, held against the store's label and the month's manifest entry: the first
-// disagreement as text, or null. Receipt by receipt, in file order:
+// What one month's bound receipts say, held against the store's label and the month's manifest entry (whose
+// [from, to) monthShortfall has found to be the whole month): the first disagreement as text, or null. Receipt by
+// receipt, in file order:
 //   1. the line is a JSON receipt;
 //   2. its URL is a one-minute candle request for this asset (receiptRequest);
 //   3. its origin is the exchange's when the store is labelled SOURCE, and a loopback one when the store is
 //      labelled LOOPBACK_SOURCE (any other label names no origin, so none is asked for);
-//   4. the buckets it asks for lie inside the entry's [from, to);
-//   5. in a store labelled SOURCE it carries an HTTP date (a text Date.parse reads);
+//   4. its first and its last bucket pass the hard guard's own bucketAllowed;
+//   5. the buckets it asks for lie inside the entry's [from, to);
+//   6. it asks for at most 300 buckets, as every request of the fetcher does (fetch-candles.mjs candleUrl);
+//   7. in a store labelled SOURCE it is dated (receiptDated);
 // then over the whole file:
-//   6. there are as many receipts as a fetch of [from, to) makes requests, ceil((to - from) / CHUNK);
-//   7. their requests leave no bucket of [from, to) unasked;
-//   8. their row counts add up to at least the stored rows plus the rows returned twice (not exactly: a body can
-//      also hold rows the fetcher ignored, and a receipt counts those too).
+//   8. there are as many receipts as a fetch of [from, to) makes requests, ceil((to - from) / CHUNK);
+//   9. their requests leave no bucket of [from, to) unasked;
+//  10. their row counts add up to at least the stored rows plus the rows returned twice (see there).
 // This raises the cost of an accident or of a hand edit: relabelling a store, widening an entry's range, swapping
 // two months or re-hashing a changed file now also takes rewriting receipts files. It proves nothing about
-// provenance. Whoever writes the files can write receipts that pass, and rows removed from a month are not noticed.
+// provenance: whoever writes the files can write receipts that pass (storeCompleteness lists what passes).
 function receiptsProblem(bytes, source, asset, entry) {
   const from = Date.parse(entry.from), to = Date.parse(entry.to), requests = [];
   let counted = 0;
@@ -324,10 +374,19 @@ function receiptsProblem(bytes, source, asset, entry) {
       return `receipt ${i + 1} names ${request.origin}, and this store is labelled as fetched from ${EXCHANGE_ORIGIN}`;
     if (source === LOOPBACK_SOURCE && !request.loopback)
       return `receipt ${i + 1} names ${request.origin}, and this store is labelled as fetched from a loopback test server`;
+    const asks = `receipt ${i + 1} asks for the buckets ${iso(request.start)} to ${iso(request.end)}`, close = request.end + MINUTE;
+    if (!bucketAllowed(request.start) || !bucketAllowed(request.end))
+      return `${asks}, which are not all inside the exploration range ${iso(EXPLORATION_FROM)} to ${iso(RESERVED_FROM)}`;
     if (!(request.start >= from && request.start <= request.end && request.end < to))
-      return `receipt ${i + 1} asks for the buckets ${iso(request.start)} to ${iso(request.end)}, which are not all inside the stored range ${iso(from)} to ${iso(to)}`;
-    if (source === SOURCE && !Number.isFinite(Date.parse(receipt.httpDate ?? '')))
-      return `receipt ${i + 1} carries no HTTP date, and this store is labelled as fetched from the exchange`;
+      return `${asks}, which are not all inside the stored range ${iso(from)} to ${iso(to)}`;
+    if (request.end - request.start > CHUNK)
+      return `${asks}, ${(request.end - request.start) / MINUTE + 1} of them, and a request of the fetcher asks for at most 300`;
+    if (source === SOURCE && !receiptDated(receipt, request.end))
+      return httpDates(receipt.httpDate, receipt.receivedAt).some(date => date > close)
+        ? `receipt ${i + 1} was received at ${describe(receipt.receivedAt)}, not later than ${iso(close)}, the close of the last bucket it asks for, ` +
+          'and this store is labelled as fetched from the exchange'
+        : `receipt ${i + 1} carries no HTTP date in a format RFC 9110 allows that is later than ${iso(close)}, the close of the last bucket it asks for, ` +
+          'and this store is labelled as fetched from the exchange';
     requests.push(request); counted += receipt.rowCount;
   }
   const needed = Math.ceil((to - from) / CHUNK);
@@ -336,9 +395,13 @@ function receiptsProblem(bytes, source, asset, entry) {
   let next = from;                          // the first bucket start no request has asked for yet
   for (const request of requests.toSorted((a, b) => a.start - b.start)) {
     if (request.start > next) break;
-    next = Math.max(next, request.end + MINUTE);
+    next = Math.max(next, request.end + MINUTE);    // a request inside a longer one asks for nothing new
   }
   if (next < to) return `the receipts' requests do not cover the stored range: none asks for the bucket starting ${iso(next)}`;
+  // A receipt counts every row of its body: each stored row once, each row two requests share twice (the entry's
+  // duplicateRows), and any row the fetcher ignored. So the count is held as a floor, not exactly. Rows added to the
+  // candle file by hand are noticed only up to the entry's own duplicateRows: lower that field in the same edit and
+  // they pass. Rows removed by hand are not noticed at all. These checks guard against accidents, not edits.
   const twice = Number.isSafeInteger(entry.duplicateRows) && entry.duplicateRows > 0 ? entry.duplicateRows : 0;
   if (counted < entry.rows + twice) return `the receipts count ${counted} rows, fewer than the ${entry.rows} stored rows plus ${twice} returned twice`;
   return null;
@@ -346,13 +409,15 @@ function receiptsProblem(bytes, source, asset, entry) {
 
 // The first way one month of the exploration range falls short of "present and complete ... fetched from the
 // exchange", as text, or null. `entry` is the month's manifest entry, if any.
-function monthProblem(dir, source, asset, month, entry) {
+function monthShortfall(dir, source, asset, month, entry) {
   const [start, end] = monthRange(month), from = Math.max(start, EXPLORATION_FROM), to = Math.min(end, RESERVED_FROM);
   if (!entry) return 'missing: the manifest has no entry for this month';
   if (entry.complete !== true) return 'not marked complete';
-  if (!(Date.parse(entry.from) <= from && Date.parse(entry.to) >= to))
+  // A fetch of a whole month stores exactly the month clipped to the exploration bounds (fetch-candles.mjs
+  // planMonths): no fetch stores a wider range, and a narrower one is not the whole month.
+  if (!(Date.parse(entry.from) === from && Date.parse(entry.to) === to))
     return `stored for ${typeof entry.from === 'string' && typeof entry.to === 'string' ? `${entry.from} to ${entry.to}` : 'an unrecorded range'}` +
-      `, which does not cover the whole month ${iso(from)} to ${iso(to)}`;
+      `, which is not exactly the whole month ${iso(from)} to ${iso(to)}`;
   if (typeof entry.receiptsSha256 !== 'string') return 'no receipts file is bound to this month (the entry has no receiptsSha256)';
   try { readMonth(dir, asset, month, entry); }
   catch (error) { return `does not verify against the manifest: ${error.message.replace(`${asset} ${month}: `, '')}`; }
@@ -361,12 +426,35 @@ function monthProblem(dir, source, asset, month, entry) {
   return receiptsProblem(readFileSync(monthPaths(dir, asset, month).receipts), source, asset, entry);
 }
 
-// Every file under a directory, at any depth, in name order (a directory that cannot be listed holds none).
-function filesUnder(dir) {
+// A month's shortfall with what repairs it: fetching the month again. The fetcher fetches a month the manifest
+// lacks, and a month whose candle file is missing, and then replaces that month's receipts and manifest entry as
+// well; deleting the candle file is how a month it would keep is fetched again (this file's header).
+function monthProblem(dir, source, asset, month, entry) {
+  const shortfall = monthShortfall(dir, source, asset, month, entry);
+  if (shortfall === null) return null;
+  const candles = existsSync(monthPaths(dir, asset, month).candles) ? `delete candles/${asset}/${month}.f64 in the store directory and ` : '';
+  return `${shortfall}; ${candles}run research/fetch-candles.mjs again`;
+}
+
+// Operating-system litter, ignored wherever it lies: files an operating system or a file system makes by itself,
+// which hold no candles and no receipts. Finder's .DS_Store, its AppleDouble files ("._" and a name), .localized,
+// .apdisk and a folder's custom icon "Icon\r"; Windows' Thumbs.db, ehthumbs.db and desktop.ini; KDE's .directory;
+// and the placeholders NFS (".nfs" and hex digits) and FUSE (".fuse_hidden" and hex digits) keep for a file that was
+// deleted while still open. Only regular files of these names are litter. An editor's swap or backup file of
+// manifest.json is not: it shows that the manifest was opened by hand, which is what this check is there to notice.
+const LITTER = new Set(['.DS_Store', '.localized', '.apdisk', 'Icon\r', 'Thumbs.db', 'ehthumbs.db', 'desktop.ini', '.directory']);
+const isLitter = name => LITTER.has(name) || name.startsWith('._') || /^\.nfs[0-9a-f]{8,}$/i.test(name) ||
+  /^\.fuse_hidden[0-9a-f]{8,}$/i.test(name);
+
+// What lies under a directory, at any depth, depth first in name order, except directories and litter: each entry
+// as {path, link}. A symbolic link is an entry of its own and is not followed, whatever it points to. A directory
+// that cannot be listed holds nothing.
+function entriesUnder(dir) {
   let entries;
   try { entries = readdirSync(dir, {withFileTypes: true}); } catch { return []; }
-  return entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-    .flatMap(entry => (entry.isDirectory() ? filesUnder(join(dir, entry.name)) : [join(dir, entry.name)]));
+  return entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).flatMap(entry =>
+    (entry.isDirectory() ? entriesUnder(join(dir, entry.name)) : entry.isFile() && isLitter(entry.name) ? []
+      : [{path: join(dir, entry.name), link: entry.isSymbolicLink()}]));
 }
 
 // PROTOCOL.md, Data boundary: "The study runs only on a complete store: every month from 2020-01 to 2025-09 present
@@ -380,21 +468,26 @@ function filesUnder(dir) {
 //   source            the manifest's source text; sourceIsExchange is true only when it is exactly SOURCE.
 //   usable            complete && sourceIsExchange: the protocol's condition in one field, so that a caller cannot
 //                     read half of it.
-//   problems          [{asset, month, problem}], in this order:
+//   problems          [{asset, month, problem}], in this order, each text ending with what repairs it:
 //                     a. per asset (ASSETS order) and month of explorationMonths() (time order), at most one: the
-//                        first of: no manifest entry; not marked complete; a stored [from, to) that does not cover
+//                        first of: no manifest entry; not marked complete; a stored [from, to) other than exactly
 //                        the whole month clipped to the exploration bounds (so 2025-09 runs through the bucket
 //                        starting 2025-09-29T23:59Z); no receipts file bound; files that do not verify against the
 //                        entry (readMonth); no row; receipts that disagree with the label or the entry
-//                        (receiptsProblem, which also says what that check is worth);
+//                        (receiptsProblem). Fetching the month again repairs each, and the text ends "; delete
+//                        candles/<ASSET>/<YYYY-MM>.f64 and run research/fetch-candles.mjs again", or "; run
+//                        research/fetch-candles.mjs again" when there is no candle file to delete;
 //                     b. per asset and month key the manifest lists outside the exploration range, one. The loader
-//                        refuses such a month's rows, so a store that lists one is not the protocol's store;
-//                     c. per candle or receipts file in the directory that no manifest entry names, one: any file
-//                        under candles/ or receipts/, and any .f64 or .jsonl file elsewhere under the directory.
-//                        `asset` and `month` are then the names the file has in those places: its directory and
-//                        its file name up to the first dot (BTC and 2025-10 for candles/BTC/2025-10.f64). The
-//                        problem text gives the path. A month that has files and no entry is reported under a
-//                        (missing) and once more here for each file.
+//                        refuses such a month's rows, so a store that lists one is not the protocol's store. No
+//                        fetch writes such an entry; the text says to delete it and the month's files;
+//                     c. per file or symbolic link under the directory other than manifest.json, its temporary file
+//                        manifest.json.tmp and the files the manifest's entries name, one, depth first in name
+//                        order. Operating-system litter (isLitter) is ignored; a link is reported and not followed,
+//                        so nothing reached through one is looked at. `asset` and `month` are the entry's directory
+//                        name ('' at the top) and its name up to the first dot (BTC and 2025-10 for
+//                        candles/BTC/2025-10.f64). The text gives the path and says to delete it or move it out of
+//                        the store directory. A month that has files and no entry is reported under a (missing)
+//                        and once more here for each file.
 //   emptyResponseMonths      [{asset, month, emptyResponses}]: the complete entries of the exploration range that
 //                     record at least one HTTP 200 answer without a row. Such a month can still be complete.
 //   lastBucketMissingMonths  [{asset, month}]: those that record that no row came back for the last wanted bucket.
@@ -404,6 +497,21 @@ function filesUnder(dir) {
 // The last three restate what the manifest records, so that a record of the study can state them. A missing or
 // unreadable manifest throws, as it does in loadSeries. Every month file is read once or twice and every receipt is
 // parsed; loadSeries does none of the parsing and stays as cheap as it was.
+// What this cannot detect. It reads the store's own records, which catches accidents and cannot prove where a file
+// came from; each of these passes as complete, and with the exchange's label as usable:
+//   - a deliberate relabel with rewritten receipts: a store from a loopback server labelled SOURCE, every receipts
+//     file rewritten to name the exchange with dated answers, and re-bound to its entry by SHA-256;
+//   - a stub that answered for the exchange, with dated answers: reached through a replaced globalThis.fetch, or
+//     passed as fetchImpl with a dir that is a symbolic link to the default directory (fetch-candles.mjs refuses
+//     only a dir whose path resolves, as text, to the default store);
+//   - months with very few rows: one row a month passes, only a month with no row is refused, and the study's
+//     coverage floor for windows is what remains between such a store and a record (rowsByMonth states the rows);
+//   - one asset's candles stored under the other asset's month (the candle file copied, its entry rewritten, the
+//     receipts untouched), when those rows are no more than this month's receipts count;
+//   - rows removed by hand, rows added by hand up to the entry's own duplicateRows, and prices changed, each with
+//     the entry rewritten to match (receiptsProblem says why);
+//   - an edit of an entry's emptyResponses or lastBucketPresent: emptyResponseMonths and lastBucketMissingMonths
+//     restate those fields and are not checked against the receipts and rows.
 export function storeCompleteness(dir = DEFAULT_DIR) {
   const manifest = requireManifest(dir), source = manifest.source, months = explorationMonths();
   const problems = [], emptyResponseMonths = [], lastBucketMissingMonths = [], rowsByMonth = {};
@@ -420,14 +528,17 @@ export function storeCompleteness(dir = DEFAULT_DIR) {
     }
   }
   for (const asset of ASSETS) for (const month of Object.keys(manifest.assets[asset]?.months ?? {}).sort())
-    if (!months.includes(month)) problems.push({asset, month, problem: 'outside the exploration range: the manifest lists this month'});
-  const named = new Set(Object.entries(manifest.assets).flatMap(([asset, block]) =>
-    Object.keys(block.months).flatMap(month => Object.values(monthPaths(dir, asset, month)))));
-  for (const file of filesUnder(dir)) {
-    const parts = relative(dir, file).split(sep), inTree = parts.length > 1 && ['candles', 'receipts'].includes(parts[0]);
-    if ((inTree || /\.(f64|jsonl)$/.test(parts.at(-1))) && !named.has(file))
-      problems.push({asset: parts.at(-2) ?? '', month: parts.at(-1).split('.')[0],
-        problem: `not in the manifest: ${parts.join('/')} is in the store directory and no manifest entry names it`});
+    if (!months.includes(month)) problems.push({asset, month, problem: 'outside the exploration range: the manifest lists this month, which no fetch ' +
+      `writes; delete its entry from manifest.json, and candles/${asset}/${month}.f64 and receipts/${asset}/${month}.jsonl where they exist, in the store directory`});
+  const named = new Set([manifestPath(dir), `${manifestPath(dir)}.tmp`, ...Object.entries(manifest.assets).flatMap(([asset, block]) =>
+    Object.keys(block.months).flatMap(month => Object.values(monthPaths(dir, asset, month))))]);
+  for (const {path, link} of entriesUnder(dir)) {
+    if (named.has(path)) continue;
+    const parts = relative(dir, path).split(sep);
+    // A link may stand for a directory of this store moved elsewhere: deleting it would cost a fetch of all it held.
+    problems.push({asset: parts.at(-2) ?? '', month: parts.at(-1).split('.')[0], problem: `not in the manifest: ${parts.join('/')} is ` +
+      `${link ? 'a symbolic link (not followed) ' : ''}in the store directory and no manifest entry names it; delete it or move it out of the store directory` +
+      (link ? '; if it points to files of this store, put them in its place instead (a store directory that is itself a link is read through)' : '')});
   }
   const complete = problems.length === 0, sourceIsExchange = source === SOURCE;
   return {complete, source, sourceIsExchange, usable: complete && sourceIsExchange, problems, emptyResponseMonths,

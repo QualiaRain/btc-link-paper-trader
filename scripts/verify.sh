@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs every check for the Python backend / TypeScript client slice plus the existing JavaScript tests.
+# Runs every check for the Python backend / TypeScript client slice plus the existing JavaScript tests
+# and the research harness tests (which fetch nothing).
 # Prerequisites: Node 22+, Python 3.11+, `pip install -e "backend[dev]"`, `npm ci --prefix web`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -12,6 +13,8 @@ echo "== existing JavaScript tests (unchanged app) =="
 npm test
 echo "== JavaScript goldens still match the existing JS =="
 node --test parity/*.test.mjs parity/*/*.test.mjs
+echo "== research harness (exploration protocol): simulator vs the engine, fetch guard, statistics, study; synthetic data only =="
+npm run test:research
 echo "== Python backend tests (unit, API, parity vs JS goldens, contract drift) =="
 (cd backend && "$PYTHON" -m pytest -q)
 echo "== TypeScript: generated types match the contract, typecheck, build, end-to-end + real-Chromium UI tests against the running API =="

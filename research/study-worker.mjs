@@ -7,10 +7,11 @@ import {runEngine} from './engine-run.mjs';
 import {loadHoldThroughEngine} from './holdthrough-oracle.mjs';
 
 // DESIGN GRID: one design window, every setting, default costs. A window below the protocol's coverage floor is
-// invalid for every setting (PROTOCOL.md Reading 7: "dropped for every setting before any statistic is
-// computed": it is never simulated); a setting the app would refuse for lack of causal warmup is invalid for that
-// window. Both are returned as NaN. The window's label is checked here as well as in runDesignGrid: a window that
-// is not a design window is refused before any price is read.
+// invalid for every setting and is never simulated; a setting the app would refuse for lack of causal warmup is
+// invalid for that window. Both are returned as NaN, so that the window keeps its place (PROTOCOL.md Reading 7: it
+// "enters none of that setting's counts, means, standard deviations or scores, and it keeps its place in the window
+// order"). The window's label is checked here as well as in runDesignGrid: a window that is not a design window is
+// refused before any price is read.
 export function gridTask(context, {window}) {
   if (window.set !== 'design') throw new Error(`The design grid was handed window ${window.index} (${window.set}); design windows only`);
   const {market, settings, costs, protocol} = context;

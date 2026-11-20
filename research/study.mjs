@@ -37,7 +37,7 @@ import {FAMILIES, HORIZON_MINUTES, TOTAL_SETTINGS, allSettings, familySettings, 
   COSTS} from './settings.mjs';
 import {ENGINE_FILE} from './engine-run.mjs';
 import {runTask} from './study-worker.mjs';
-import {renderResults, pValue, labelWithReading} from './report.mjs';
+import {renderResults, pValue, labelWithReading, calibrationNote} from './report.mjs';
 
 // v3: the record of Amendment 2 (the buy-and-hold reading beside every label, the comparison account's own row,
 // the descriptive figures of Reading 9, the calibration block, what an overwritten record said of itself).
@@ -159,15 +159,16 @@ export const FURTHER_READINGS = Object.freeze([
     'windows; their p-values are reported, not used.',
   'Buy-and-hold reading: b is the comparison account at the same cost level as r ("same costs"), so the feeBps 10 ' +
     'and feeBps 40 reruns each have a reading of their own. They are reported, not used: the reading beside a ' +
-    'label is the one at default costs.',
-  'The comparison account\'s own row: b does not depend on the setting, so it is read from the run of one ' +
-    'long-lookback setting, which exists on every window above the coverage floor. "Did simply holding pass?" is ' +
-    'answered by the conditions of "confirmed at default costs": at least the minimum of valid confirmation ' +
-    'windows, mean(b) > 0 and a confirmation p-value below 0.05 / k. With no nominee there is no k: the numbers ' +
-    'are reported without a bar.',
-  'Descriptive figures: the two halves are the first and the second half of the confirmation windows by position ' +
-    '(windows 50 to 61 and 62 to 73 in the protocol\'s own run; a list of odd length, possible only in a ' +
-    'scaled-down run, gives its middle window to the first half). The lowest third is taken on b at default costs.',
+    'label is the one at default costs. "At least 20 valid windows" is the protocol\'s minimum of valid ' +
+    'confirmation windows, which a scaled-down run sets to its own.',
+  'The comparison account\'s own row: b does not depend on the setting, so it is read from the runs of one ' +
+    'long-lookback setting, which Reading 1 never refuses. "Did simply holding pass?" is answered by the ' +
+    'conditions of "confirmed at default costs": at least the minimum of valid confirmation windows, mean(b) > 0 ' +
+    'and a confirmation p-value below 0.05 / k. With no nominee there is no k: the numbers are reported without a ' +
+    'bar.',
+  'Descriptive figures are computed on r and b at default costs. A scaled-down run, whose confirmation set is not ' +
+    'windows 50 to 73, splits its own confirmation windows into halves by position, and a list of odd length gives ' +
+    'its middle window to the first half.',
   'Direction sign test: the app\'s two-sided exact sign test (report-card.js) on direction hits against misses, ' +
     'flat forecasts excluded, pooled over the nominee\'s valid confirmation windows, per asset, at default costs.',
   'Cost hurdle: at every scored minute of a valid window (design and confirmation) whose minute one horizon later ' +
@@ -182,10 +183,12 @@ export const FURTHER_READINGS = Object.freeze([
 ]);
 // PROTOCOL.md, "What a result would and would not establish", as amended: "If the buy-and-hold reading beside it
 // is no ... it justifies nothing further. If the reading is yes, it would justify writing a held-out contract for
-// that setting and nothing more".
+// that setting and nothing more ... They pass too often when windows are not independent of one another, so a pass
+// is a reason to test on untouched data and never a finding by itself."
 const STATUS = 'Exploration, not evidence. Simulated cash only; no orders exist. A confirmed nominee whose ' +
   'buy-and-hold reading is "no" justifies nothing further; one whose reading is "yes" would justify writing a ' +
-  'held-out contract for that one setting and nothing more.';
+  'held-out contract for that one setting and nothing more. Every label assumes that a setting\'s windows are ' +
+  'independent of one another, so a pass is a reason to test on untouched data and never a finding by itself.';
 // What the record gives as the source of the data in a dry run.
 const DRY_RUN_SOURCE = 'in-memory market supplied by the caller; NOT the candle store';
 
@@ -251,8 +254,9 @@ async function runTasks(workers, context, tasks, onDone = () => {}) {
     let next = 0, done = 0, settled = false;
     // A worker is terminated only once it has loaded its modules (its first message says so) or is gone. Node 22
     // aborts the whole process when a thread is terminated while a module with a top-level await is still being
-    // evaluated in it, and research/engine-run.mjs is such a module; an early error in one worker would otherwise
-    // take the process down while the others are still starting.
+    // evaluated in it. No module a study worker loads has one any longer (research/engine-run.mjs imports the
+    // engine statically; research/study.test.mjs checks the whole graph), so this wait is a second guard: an
+    // early error in one worker cannot take the process down while the others are still starting.
     const finish = (settle, value) => {
       if (settled) return;
       settled = true;
@@ -462,6 +466,12 @@ export function confirmationLabel({r, rFee10, k, minValidWindows = PROTOCOL.minV
   return {label, conditions, threshold, minValidWindows, meanFee10, test};
 }
 
+// The rule of the reading on its numbers ("Yes needs at least 20 valid windows, intercept > 0 and that p-value
+// < 0.05 / k"): the minimum of windows is inclusive, the other two are strict. A p-value equal to the bar, or an
+// intercept of exactly 0, is not enough. NaN meets neither strict condition.
+export const readingConditions = ({n, intercept, p}, {threshold, minValidWindows}) =>
+  ({enoughWindows: n >= minValidWindows, positiveIntercept: intercept > 0, pBelowThreshold: p < threshold});
+
 // "More than a share of buy-and-hold: yes or no" (PROTOCOL.md, Confirmation, as amended). r: a nominee's
 // confirmation returns; b: the comparison account's at the same costs; both aligned to the confirmation windows
 // (NaN = invalid for the nominee); k: the number of nominees. "Fit r = intercept + slope × b by least squares over
@@ -476,18 +486,21 @@ export function moreThanAShareOfBuyAndHold({r, b, k, minValidWindows = PROTOCOL.
   resamples = DEFAULTS.resamples}) {
   checkNominees(k, 1);
   const threshold = 0.05 / k, {adjusted: {score: T, ...adjusted}, ...fit} = buyAndHoldReading(r, b, {resamples});
-  const conditions = {enoughWindows: fit.n >= minValidWindows, positiveIntercept: fit.intercept > 0,
-    pBelowThreshold: fit.p < threshold};
+  const conditions = readingConditions(fit, {threshold, minValidWindows});
   const yes = conditions.enoughWindows && conditions.positiveIntercept && conditions.pBelowThreshold;
   return {reading: yes ? 'yes' : 'no', conditions, threshold, minValidWindows, ...fit, adjusted: {...adjusted, T}};
 }
 
-// The descriptive figures of Reading 9 for one nominee at default costs. r and b are its returns and the comparison
-// account's, aligned to `windows`, the confirmation windows (NaN = invalid for the nominee).
+// The descriptive figures of Reading 9 for one nominee at default costs: the shape of its returns, not tests. r
+// and b are its returns and the comparison account's, aligned to `windows`, the confirmation windows (NaN = invalid
+// for the nominee; b is defined wherever r is, Reading 8).
 // Returns {autocorrelation: [lag 1, 2, 3, 4], halves: [{windows: [first, last], n, mean} x 2], lowestThird:
 // {n, windows, mean, meanComparison}}; lowestThird.windows are in ascending b, and meanComparison is the mean of b
 // over them.
 export function descriptiveFigures(windows, r, b) {
+  if (r.length !== windows.length || b.length !== windows.length) throw new Error('r and b need one value per window');
+  for (let w = 0; w < r.length; w++)
+    if (r[w] === r[w] && !Number.isFinite(b[w])) throw new Error(`Window ${windows[w].index}: r without the comparison account's b`);
   const count = xs => xs.reduce((n, x) => n + (x === x ? 1 : 0), 0);
   // "The halves of the confirmation set are windows 50 to 61 and 62 to 73": the first and the second half of the
   // confirmation windows by position, each with its number of valid windows. A list of odd length (a scaled-down
@@ -552,7 +565,10 @@ export function confirmNominees({market, windows, prepared, nominees, protocol =
     const buyAndHold = {...reading(r, b), fee10: reading(rFee10, aligned('bFee10')), fee40: reading(rFee40, aligned('bFee40'))};
     // b is defined wherever the nominee ran (Reading 8), so the fit is over the nominee's valid windows.
     if (buyAndHold.n !== test.n) throw new Error(`${setting.id}: the buy-and-hold fit is not over the nominee's valid confirmation windows`);
-    return {id: setting.id, family: setting.family, k, label, moreThanAShareOfBuyAndHold: buyAndHold.reading,
+    // "Stated beside the label of every nominee, wherever the label is printed": the label, the reading, and the
+    // two as one text, exactly as the summary and RESULTS.md print them.
+    const beside = {label, moreThanAShareOfBuyAndHold: buyAndHold.reading};
+    return {id: setting.id, family: setting.family, k, ...beside, labelWithReading: labelWithReading(beside),
       conditions, threshold, minValidWindows, meanFee10,
       ...costLevel(perWindow, 'r', r, test), fee10: costLevel(perWindow, 'rFee10', rFee10, confirmationP(rFee10, {resamples})),
       fee40: costLevel(perWindow, 'rFee40', rFee40, confirmationP(rFee40, {resamples})),
@@ -575,6 +591,12 @@ export function confirmNominees({market, windows, prepared, nominees, protocol =
 // and a long-lookback setting has a run on every window above the coverage floor (Reading 1: "Family L has no such
 // refusal"), which is where Reading 8 defines b.
 const COMPARISON_CARRIER = familySettings('L').find(setting => setting.id === 'L-h1440-span40320-b320-s0-hold0');
+
+// "Did simply holding pass?" on the row's numbers: what "confirmed at default costs" asks, with the nominees' bar
+// 0.05 / k. The minimum of windows is inclusive; a mean of exactly 0, or a p-value equal to the bar, does not pass.
+// With no nominee (k = 0) there is no bar, and pBelowThreshold is null.
+export const heldConditions = ({n, mean, p}, {k, minValidWindows}) =>
+  ({enoughWindows: n >= minValidWindows, positiveMean: mean > 0, pBelowThreshold: k ? p < 0.05 / k : null});
 
 // The comparison account's own row (PROTOCOL.md, Confirmation, "Reported alongside": "the comparison account's own
 // returns b on the confirmation windows put through the same confirmation calculation (did simply holding
@@ -606,8 +628,7 @@ export function comparisonAccountRow({market, windows, prepared, k, protocol = P
     return costLevel(perWindow, key, values, confirmationP(values, {resamples}), 'b');
   };
   const row = level('b'), threshold = k ? 0.05 / k : null, minValidWindows = protocol.minValidConfirmationWindows;
-  const conditions = {enoughWindows: row.n >= minValidWindows, positiveMean: row.mean > 0,
-    pBelowThreshold: k ? row.p < threshold : null};
+  const conditions = heldConditions(row, {k, minValidWindows});
   return {k, threshold, minValidWindows,
     passed: k ? conditions.enoughWindows && conditions.positiveMean && conditions.pBelowThreshold : null, conditions,
     ...row, fee10: level('bFee10'), fee40: level('bFee40'), perWindow};
@@ -763,7 +784,7 @@ export function codeState() {
 
 // A path is recorded as given only when it is relative and stays inside the working directory; anything else
 // (an absolute path may hold a user or machine name) is recorded as changed without its value.
-const WITHHELD = '(a path outside the working directory; not recorded)';
+const WITHHELD = '(an absolute path, or one outside the working directory; not recorded)';
 const shownPath = path =>
   (typeof path === 'string' && !isAbsolute(path) && !normalize(path).startsWith('..') ? path : WITHHELD);
 
@@ -814,21 +835,28 @@ function replacedRecord(path) {
   } catch { return null; }
 }
 
+// The three kinds of problem research/dataset.mjs storeCompleteness reports, told apart by how their text begins:
+// 'month', at most one per asset and month of the range (so at most 138); 'outside', one per asset and month the
+// manifest lists outside the range; 'unnamed', one per file or symbolic link in the store directory that no
+// manifest entry names, whose asset and month fields are only the path's directory and file name.
+const problemKind = ({problem}) => (problem.startsWith('outside the exploration range') ? 'outside'
+  : problem.startsWith('not in the manifest') ? 'unnamed' : 'month');
+// One problem as a line of the refusal: an unnamed file is named by its path, which the text already holds.
+const problemLine = p => (problemKind(p) === 'unnamed' ? `  ${p.problem}` : `  ${p.asset} ${p.month}: ${p.problem}`);
+
 // What keeps a store from being the protocol's (PROTOCOL.md, Data boundary: "every month from 2020-01 to 2025-09
 // present and complete for both assets, fetched from the exchange. A month that holds no row for an asset is not
-// complete"), in words, from what research/dataset.mjs storeCompleteness returned. Its problems are of three
-// kinds, told apart by how their text begins: at most one per asset-month of the range, one per month the manifest
-// lists outside the range, and one per candle or receipts file that no manifest entry names.
+// complete"), in words, from what storeCompleteness returned: the label, then each kind of problem counted as what
+// it is. Only the first kind is a count of asset-months.
 function storeShortfalls(store) {
-  const beginning = text => store.problems.filter(p => p.problem.startsWith(text)).length;
-  const outside = beginning('outside the exploration range'), unnamed = beginning('not in the manifest');
-  const months = store.problems.length - outside - unnamed;
+  const count = kind => store.problems.filter(p => problemKind(p) === kind).length;
+  const months = count('month'), outside = count('outside'), unnamed = count('unnamed');
   return [
     ...(store.sourceIsExchange ? [] : [`its source is "${store.source}", not the exchange ("${SOURCE}")`]),
     ...(months ? [`${months} of the ${ASSETS.length * explorationMonths().length} asset-months from 2020-01 to 2025-09 ` +
-      'are missing, partial, without a row or do not verify'] : []),
-    ...(outside ? [`its manifest lists ${outside} month${outside === 1 ? '' : 's'} outside 2020-01 to 2025-09`] : []),
-    ...(unnamed ? [`${unnamed} candle or receipts file${unnamed === 1 ? ' in its directory is' : 's in its directory are'} ` +
+      'are missing, incomplete, without a row, or not borne out by their own files and receipts'] : []),
+    ...(outside ? [`its manifest has ${outside} entr${outside === 1 ? 'y' : 'ies'} for months outside 2020-01 to 2025-09`] : []),
+    ...(unnamed ? [`${unnamed} file${unnamed === 1 ? ' or link in its directory is' : 's or links in its directory are'} ` +
       'named by no manifest entry'] : [])];
 }
 
@@ -867,12 +895,17 @@ const OPTIONS = ['data', 'out', 'report', 'workers', 'resamples', 'protocol', 's
 //   format, status, banner (the lines that must stand first in the summary and in the report; [] for a protocol run)
 //   protocol        {file, sha256, windows, costs, nominationTop, resampling: {resamples, seed}}
 //   deviations      [{option, value, default, reason, ...}]
-//   readings        {protocol: the seven Readings, notInProtocol: FURTHER_READINGS}
+//   readings        {protocol: the nine Readings, notInProtocol: FURTHER_READINGS}
 //   code            codeState(): {commit, node, trackedFilesModified, researchModulesUntracked,
 //                   allModulesCommitted, modules: [{file, sha256, state}], engine, protocol, problems}
-//   data            {source, kind, completeExchangeStore, completeness: {complete, sourceIsExchange, problems},
-//                   manifestSha256, rows, firstClose, lastClose, manifest, receipts}
-//   previousRun     null, or the replaced files: {exploration, report: {path, sha256, bytes, modifiedAt} | null}
+//   calibration     {file, sha256, statsSha256, statsSha256ThatRan, measuredWithTheStatsThatRan}: the measurement
+//                   behind the protocol's two tables, held against the research/stats.mjs that ran (null = unknown)
+//   data            {source, kind, completeExchangeStore, completeness: null (dry run) | {complete, sourceIsExchange,
+//                   usable, problems, emptyResponseMonths, lastBucketMissingMonths, rowsByMonth}, manifestSha256,
+//                   rows, firstClose, lastClose, manifest, receipts}
+//   previousRun     null, or the replaced files: {exploration, report: {path, sha256, bytes, modifiedAt} | null,
+//                   record: {format, banner, dataSource} of the replaced exploration.json, or null when there was
+//                   none or it could not be read as a record of this study}
 //   windows         one row per window: index, set, start, end, expected, observed, missing, shared, missingShared,
 //                   sharedFraction, scoreStart, scoreEnd, valid, invalidReason
 //   invalidWindows  the windows invalid for every setting
@@ -880,11 +913,14 @@ const OPTIONS = ['data', 'out', 'report', 'workers', 'resamples', 'protocol', 's
 //   pooled          all families: {settings, withValidWindows, eligible, positiveMean, eligiblePositiveMean,
 //                   best: {id, T, t, lag1, factor, skewness, n, mean, sd}, searchAdjusted: {p, resamples, seed,
 //                   windowsResampled}}
+//   comparisonAccount  comparisonAccountRow(): the comparison account's own row on the confirmation windows
 //   nominees        [{family, id, setting, design: {rank, n, mean, sd, t, lag1, factor, T, skewness, sharePositive,
 //                   meanFills, identical, neighbours, neighbourMedianT, searchAdjustedP, perWindow},
-//                   confirmation: {k, label, conditions, threshold, minValidWindows, meanFee10, n, mean, sd, t,
-//                   lag1, factor, T, skewness, pT, pResample, p, sharePositive, worst, fee10, fee40, meanFills,
-//                   meanFees, meanComparison, regression, direction, invalidForSetting, perWindow},
+//                   confirmation: {id, family, k, label, moreThanAShareOfBuyAndHold, labelWithReading, conditions,
+//                   threshold, minValidWindows, meanFee10, n, mean, sd, t, lag1, factor, skewness, pT, pResample, p,
+//                   T, sharePositive, worst, fee10, fee40, meanFills, meanFees, meanComparison, regression,
+//                   buyAndHold (moreThanAShareOfBuyAndHold() at default costs, with fee10 and fee40), autocorrelation,
+//                   halves, lowestThird (descriptiveFigures()), direction, invalidForSetting, perWindow},
 //                   exactCheck: {id, reference, fedHistory, tolerance, windowsCompared, windowsRefusedByBoth,
 //                   maxRelativeDifference, fillsEqual}}]
 //   families        per family: the fields of `pooled`, refusedForWarmup {window: settings}, top (the 20
@@ -939,14 +975,19 @@ export async function runStudy(options = {}) {
       'A dry run of the pipeline: no candle store was read, so nothing here is a result of the protocol.');
   } else {
     store = await timed('store', () => storeCompleteness(data));
-    const wrong = store.usable ? [] : storeShortfalls(store), line = p => `  ${`${p.asset} ${p.month}`.trim()}: ${p.problem}`;
+    const wrong = store.usable ? [] : storeShortfalls(store);
     if (!store.usable && !allowIncompleteStore) {
-      const named = store.problems.slice(0, 8).map(line);
+      // The first eight problems by name, each ending with what repairs it (research/dataset.mjs), and how many more.
+      const named = store.problems.slice(0, 8).map(problemLine), more = store.problems.length - named.length;
       throw new Error(['The study runs only on the complete exchange store (research/PROTOCOL.md, Data boundary). ' +
-        `This store is not it: ${wrong.join('; ')}.`, ...named,
-        ...(store.problems.length > named.length ? [`  and ${store.problems.length - named.length} more`] : []),
-        'Fetch what is missing with research/fetch-candles.mjs, or pass --allow-incomplete-store: the run is then ' +
-        'marked at its top as not a run on the complete exchange store'].join('\n'));
+        `This store is not it: ${wrong.join('; ')}.`, ...named, ...(more > 0 ? [`  and ${more} more`] : []),
+        ...(store.sourceIsExchange ? [] : ['A store with another label is not made the exchange store by fetching into ' +
+          'it: research/fetch-candles.mjs fetches from the exchange into a directory of its own.']),
+        // The fetcher's directory matters only where a listed remedy is to run it, that is for a month's problem.
+        ...(named.length ? [`Each problem ends with what repairs it${data === DEFAULTS.data ||
+          !store.problems.slice(0, 8).some(problem => problemKind(problem) === 'month') ? '' : ': research/fetch-candles.mjs ' +
+          'writes .research-data unless it is given --dir with the directory this run was given as --data'}.`] : []),
+        'Or pass --allow-incomplete-store: the run is then marked at its top as not a run on the complete exchange store'].join('\n'));
     }
     if (!store.usable) banner.push('NOT A PROTOCOL RUN: this run did NOT use the complete exchange store ' +
       `(--allow-incomplete-store): ${wrong.join('; ')}. Its numbers are not results of research/PROTOCOL.md.`);
@@ -984,12 +1025,15 @@ export async function runStudy(options = {}) {
       'times are then kept in the new record');
   const previousRun = existing.length ? {exploration: fileFacts(paths.exploration), report: fileFacts(paths.report),
     record: replacedRecord(paths.exploration)} : null;
+  // A banner line is named by its words before the first colon ("DRY RUN", "NOT A PROTOCOL RUN", ...).
   const tags = lines => (lines.length ? lines.map(text => text.split(':')[0]).join(', ') : 'none');
   const replaced = !previousRun ? null
-    : !previousRun.record ? 'what the replaced exploration.json recorded could not be read, so it is counted as an ' +
-      'earlier look at the confirmation windows'
+    : !previousRun.exploration ? 'only a report was there, with no exploration.json to say what it recorded, so it is ' +
+      'counted as an earlier look at the confirmation windows'
+    : !previousRun.record ? 'the replaced exploration.json could not be read as a record of this study, so it is ' +
+      'counted as an earlier look at the confirmation windows'
     : previousRun.record.dataSource === DRY_RUN_SOURCE ? 'the replaced record was a dry run on an in-memory market ' +
-      `(its banner: ${tags(previousRun.record.banner)}), not a run on the candle store`
+      `supplied by its caller (its banner: ${tags(previousRun.record.banner)}), not a run on the candle store`
     : `the replaced record was a run on a candle store (source "${previousRun.record.dataSource}"; its banner: ` +
       `${tags(previousRun.record.banner)}), so the confirmation windows had been looked at before this run`;
   if (previousRun) banner.push(`REPLACES AN EARLIER RECORD (--overwrite): ${replaced}. The replaced files are identified under previousRun.`);
@@ -1175,8 +1219,8 @@ export async function runStudy(options = {}) {
 
 // The short plain summary the command prints. Its first lines are the record's banner, if it has one.
 export function summaryText(results, written = null) {
-  const {banner, code, data, windows, invalidWindows, designGrid, families, pooled, nominees, defaultSetting,
-    costHurdle: hurdle, deviations, timing, protocol} = results;
+  const {banner, code, calibration, data, windows, invalidWindows, designGrid, families, pooled, comparisonAccount: held,
+    nominees, defaultSetting, costHurdle: hurdle, deviations, timing, protocol} = results;
   const absent = value => value === null || value === undefined;
   const number = (value, digits = 2) => (absent(value) ? 'n/a' : value.toFixed(digits));
   const signed = value => (absent(value) ? 'n/a' : `${value >= 0 ? '+' : ''}${value.toFixed(3)}%`);
@@ -1204,13 +1248,22 @@ export function summaryText(results, written = null) {
     '(search-adjusted p: of the best T among that many settings; reported, not a gate)',
     '',
     nominees.length ? `Nominees: ${nominees.length}`
-      : 'Nominees: none. No family had a qualifying setting among its ten highest-scoring distinct settings.',
+      : pooled.eligible ? 'Nominees: none. No family had a qualifying setting among its ten highest-scoring distinct settings.'
+      : `Nominees: none. No setting was eligible (at least ${protocol.windows.minValidDesignWindows} valid design windows ` +
+        'and a fill in at least half of them).',
+    // The label, with the buy-and-hold reading beside it (PROTOCOL.md, Confirmation: "wherever the label is printed").
     ...nominees.map(({id, design, confirmation: c, exactCheck: check}) =>
       `  ${id}: design mean ${signed(design.mean)} (T ${number(design.T)}, ${design.n} windows); ` +
       `confirmation mean ${signed(c.mean)} over ${c.n} windows (at least ${c.minValidWindows} needed), ` +
-      `p ${pValue(c.p)} against ${number(c.threshold, 4)}, feeBps 10 mean ${signed(c.fee10.mean)}: ${c.label.toUpperCase()}; ` +
-      `engine check: ${check.windowsCompared} windows agree with the ${check.reference}` +
+      `p ${pValue(c.p)} against ${number(c.threshold, 4)}, feeBps 10 mean ${signed(c.fee10.mean)}; buy-and-hold fit ` +
+      `intercept ${signed(c.buyAndHold.intercept)}, slope ${number(c.buyAndHold.slope, 3)}, reading p ${pValue(c.buyAndHold.p)}: ` +
+      `${labelWithReading(c)}; engine check: ${check.windowsCompared} windows agree with the ${check.reference}` +
       `${check.fedHistory && check.reference === REFERENCES.oracle ? ', fed the history the rule reads' : ''}`),
+    // The comparison account's own row: "did simply holding pass?" on the same bar, or the numbers alone.
+    `Comparison account (half BTC, half LINK, held) on ${held.n} confirmation windows above the coverage floor: ` +
+      `mean ${signed(held.mean)}, confirmation p ${pValue(held.p)}` + (held.k
+      ? ` against ${number(held.threshold, 4)}: simply holding ${held.passed ? 'PASSED' : 'did not pass'} the test a nominee is confirmed by`
+      : ' (no nominee, so no bar)'),
     '',
     `Default setting (${defaultSetting.description}): mean ${signed(defaultSetting.mean)} over ${defaultSetting.n} ` +
       `windows, share of windows above 0: ${number(defaultSetting.sharePositive)}; buy-and-hold comparison mean ` +
@@ -1219,6 +1272,7 @@ export function summaryText(results, written = null) {
       hurdle.horizons.map(h => `${h.horizonMinutes}m BTC ${number(h.BTC.medianAbsLogMoveBps, 1)} / LINK ` +
         `${number(h.LINK.medianAbsLogMoveBps, 1)} bps`).join('; '),
     `Deviations from ${protocol.file}: ${deviations.length ? deviations.map(d => d.option).join(', ') : 'none'}`,
+    ...calibrationNote(calibration),
     `Wall time ${number(timing.wallSeconds, 1)} s` +
       `${written?.path ? `; wrote ${written.path} (${(written.bytes / 1e6).toFixed(2)} MB) and ${written.reportPath}` : ''}`,
   ];

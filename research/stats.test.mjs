@@ -1333,6 +1333,11 @@ test('a table cell: one decimal below 10%, whole percent from 10% up, and a coun
   assert.equal(cellText({count: 43, of: 200}), '22% (43 of 200)'); assert.equal(cellText({count: 34, of: 200}), '17% (34 of 200)');
   assert.equal(cellText({count: 12345, of: 20000}), '62% (12,345 of 20,000)'); assert.equal(cellText({count: 200, of: 200}), '100% (200 of 200)');
   assert.equal(cellText({count: 1234567, of: 12345678}), '10% (1,234,567 of 12,345,678)');
+  // Rounding never shows a count above zero as 0.0%, or a count below n as 100%.
+  assert.equal(cellText({count: 19941, of: 20000}), '99.7% (19,941 of 20,000)'); assert.equal(cellText({count: 199, of: 200}), '99.5% (199 of 200)');
+  assert.equal(cellText({count: 19899, of: 20000}), '99% (19,899 of 20,000)');   // 99.495%
+  assert.equal(cellText({count: 19999, of: 20000}), 'above 99.9% (19,999 of 20,000)'); assert.equal(cellText({count: 1, of: 20000}), 'below 0.1% (1 of 20,000)');
+  assert.equal(cellText({count: 9, of: 20000}), 'below 0.1% (9 of 20,000)'); assert.equal(cellText({count: 10, of: 20000}), '0.1% (10 of 20,000)');
   // A count of zero is not a rate of zero. (The first calibration printed "0.0 ±0.0" for 0 of 200, a finding of
   // the second verification round; that share() helper and its test line are gone.) The bound is rounded up.
   assert.equal(cellText({count: 0, of: 200}), '0 of 200 (below 1.5%)'); assert.equal(cellText({count: 0, of: 100}), '0 of 100 (below 3.0%)');

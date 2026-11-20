@@ -429,11 +429,17 @@ export async function compareRetired({scale = RETIRED_SCALE, threads = Math.min(
 const thousands = n => String(n).replace(/\B(?=(\d{3})+$)/g, ',');
 
 // count / of in percent, in whole-number arithmetic: one decimal below 10%, whole percent from 10% up, halves
-// rounded up. `ceiling` rounds up instead, for an upper bound that has to stay true.
+// rounded up. `ceiling` rounds up instead, for an upper bound that has to stay true. Rounding never turns a count
+// above zero into 0.0%, or a count below `of` into 100%: those show as 'below 0.1%', one decimal from 99.5% up, and
+// 'above 99.9%'.
 function percent(count, of, ceiling = false) {
   const tenths = ceiling ? Math.ceil(1000 * count / of) : Math.floor((2000 * count + of) / (2 * of));
-  if (tenths < 100) return `${Math.floor(tenths / 10)}.${tenths % 10}%`;
-  return `${ceiling ? Math.ceil(100 * count / of) : Math.floor((200 * count + of) / (2 * of))}%`;
+  if (!ceiling && count > 0 && tenths === 0) return 'below 0.1%';
+  if (!ceiling && count < of && tenths >= 1000) return 'above 99.9%';
+  const decimal = `${Math.floor(tenths / 10)}.${tenths % 10}%`;
+  if (tenths < 100) return decimal;
+  const whole = ceiling ? Math.ceil(100 * count / of) : Math.floor((200 * count + of) / (2 * of));
+  return !ceiling && count < of && whole === 100 ? decimal : `${whole}%`;
 }
 
 // One table cell. A count of zero does not show a rate of zero: it is given with the bound 3 / n, the largest

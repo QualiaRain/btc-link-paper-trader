@@ -48,10 +48,11 @@ export function assertSeries(series, label = 'series') {
 // between them (replay.js builds frames the same way: BTC rows whose timestamp LINK also has). Reading 2: the
 // session ends at scoreEnd, which is earlier than `end` when the nominal last minute is missing for an asset.
 // `valid` is the protocol's window rule: at least minSharedFraction of the window's minutes observed for both
-// assets (and the two frames any run needs). A window that fails it is invalid for EVERY setting. Reading 7 has
-// such a window dropped for every setting before any statistic is computed: that is the caller's job, done once
-// per window on this flag. The simulators compute no statistic and run whatever window they are given as long as
-// it has two frames, so a caller that looked only at a run's own `valid` would keep a low-coverage window.
+// assets (and the two frames any run needs). A window that fails it is invalid for EVERY setting. Under Reading 7
+// as amended, such a window "enters none of that setting's counts, means, standard deviations or scores, and it
+// keeps its place in the window order": the caller does that, once per window, on this flag. The simulators compute
+// no statistic and run whatever window they are given as long as it has two frames, so a caller that looked only at
+// a run's own `valid` would count a low-coverage window.
 export function prepareWindow(market, {start, end}, p = PROTOCOL) {
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start % MINUTE || end % MINUTE || end < start)
     throw new Error('Window endpoints must be minute-close timestamps with end >= start');

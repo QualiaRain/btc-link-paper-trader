@@ -57,8 +57,8 @@ function readCosts(costs) {
 }
 
 // Why a run does not exist for this setting, or null. The protocol's 90% coverage floor is NOT applied here: it
-// makes a window invalid for every setting (prepared.valid). Reading 7 has the caller drop such a window for every
-// setting before any statistic is computed; this file computes none and runs any window with two frames.
+// makes a window invalid for every setting (prepared.valid). Under Reading 7 as amended the caller keeps such a
+// window in its place and counts it in no statistic; this file computes none and runs any window with two frames.
 function refusal(market, prepared, s) {
   if (prepared.shared < 2) return 'fewer than 2 shared minutes';   // no scored span: the engine needs durationMs > 0
   if (prepared.scoreEnd - prepared.scoreStart > 366 * DAY) fail('durationMs exceeds supported maximum');

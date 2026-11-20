@@ -28,6 +28,7 @@ Paper Trail was built by one operator directing AI coding agents (Claude Code an
 | [#7](https://github.com/QualiaRain/btc-link-paper-trader/pull/7) | Faster forecast settling (31-day replay 100 s → 1.5 s) | Claude Code | Full accounts byte-identical before and after on three 31-day runs; two deliberately broken variants fail the new tests |
 | [#4](https://github.com/QualiaRain/btc-link-paper-trader/pull/4) | Python backend + TypeScript frontend (requested), run locally with `scripts/run-local.sh` | Claude Code builders; Codex follow-up | Python must match goldens produced by the JavaScript engine; full suite (JS, Python, TypeScript with real Chromium) rerun independently before each push; GitHub CI; fresh-clone rehearsal of the launcher (sample replay matches, saved run survives a restart, unreachable off loopback) |
 | [#10](https://github.com/QualiaRain/btc-link-paper-trader/pull/10) | Coverage is part of the answer: sample runs record their coverage block (1,648 of 1,800 minutes, 152 missing, computed from the data, not copied from a README), summaries count observation gaps and invalid frames, and the Run view and History cards in both apps show coverage, fetch receipts and those counts | Claude Code | Goldens regenerated with the repo's own generators and the diff inspected (only coverage/count fields, resulting sample market hashes and regenerated Python fixture timestamps changed); new JS, Python and real-Chromium tests for every field, including the legacy "not recorded" path on the committed browser exports; full `scripts/verify.sh` rerun before pushing |
+| (branch `claude/inspiring-knuth-15bl7t`, no PR yet) | Exploration protocol and harness for "can any setting of this rule make money after costs?": 13,200 settings, chosen on 2020 to 2023 and checked once on 2023 to 2025, with a fetcher that refuses the range reserved for a held-out test. **Not run: the build environment cannot reach Coinbase, so there is no result** | Claude Code builder agents; separate Claude Code verifier agents | Synthetic data and the bundled sample only. The fast simulator matched the unmodified engine in every case the verifiers built; no look-ahead and no leakage from the confirmation windows was found; four rounds of independent attack changed the protocol twice before any data (see "Amendments" in [`research/PROTOCOL.md`](../research/PROTOCOL.md)); 217 research tests (one, a full-size dry run, runs only on request), now part of `scripts/verify.sh` |
 
 ## Mistakes caught, and how
 
@@ -61,6 +62,18 @@ Paper Trail was built by one operator directing AI coding agents (Claude Code an
    - Grade: **Measured** for the regression checks; the independent reviewer also compared the changed goldens and
      existing assertions. These checks establish engineering behavior, not predictive skill.
 
+6. **A test that passed far too often, then a description of the fix that was too kind (research protocol).**
+   - **What happened:** the first exploration protocol judged the best of thousands of settings with a resampling test. On simulated returns with nothing to find, it declared a find in up to 61% of studies against a stated 5%. The amended protocol then described the replacement as "up to about twice too lenient".
+   - **How it was caught:** both times by an independent verifier agent simulating returns with no skill in them. The measurement that followed showed that whenever windows depend on each other every test passes too often: up to three and a half times its level when each window leans on the one before, and about five to thirteen times at confirmation when good and bad months come in streaks. No simple substitute repaired this on 24 windows, and "confirmed" could mean no more than being invested while prices rose.
+   - **The fix:** two amendments, both before any exploration data existed in the environment. The limit ("Dependence between windows") is now stated in the protocol in bold, a reading stands beside every label ("more than a share of buy-and-hold: yes or no"), and the protocol's tables are written from a committed measurement so they cannot drift from it. A further verifier then held the prose against that measurement; it found a wrong unit and three smaller inaccuracies, corrected the same day.
+   - **The lesson:** a description of a test is itself a claim and needs its own verifier.
+   - Grade: **Measured** on simulated data only (`node research/calibration.mjs`, recorded in `research/calibration.json`; a verifier reproduced it with the committed code and agreed within sampling error with generators of its own). The substitutes that were tried are **Self-reported** (a scratch measurement).
+7. **A study that accepted missing data (research harness).**
+   - **What happened:** the first build ran on a candle store holding 6 of 69 months and reported nominees with "Deviations: none". After that was fixed, a store whose months were all present but empty still passed.
+   - **How it was caught:** verifier agents built damaged stores and ran the study on them.
+   - **The fix:** the study refuses a store unless every month is present, holds rows and is vouched for by its request receipts. An override is printed as the first line of the results.
+   - Grade: **Measured** (the tests for each refusal fail without the check).
+
 ## What the results say
 
 - **Bundled sample, about 30 hours of real Coinbase minute data, default 7-minute trend rule:**
@@ -73,6 +86,7 @@ Paper Trail was built by one operator directing AI coding agents (Claude Code an
 ## Not claimed
 
 - **No trading edge.** One 30-hour window proves nothing either way, and repeatedly tuning settings on the same data would overfit them. A test that would mean something has been drafted: rules and pass criteria fixed in advance, then judged on randomly chosen unseen month-long windows. It has not been frozen or run.
+- **No result from the exploration study.** `research/` can search 13,200 settings on 2020 to 2025 data under rules fixed in advance. It has been checked on synthetic data only and has not been run, because the build environment cannot reach Coinbase. Until it is run it says nothing about any rule, and a run can at most nominate one setting for a held-out test. See [research/README.md](../research/README.md).
 - **Paper fills are not real fills.** Replay bid/ask is modeled from candle closes with an assumed spread. Latency, queue position, market impact, taxes and funding are not modeled.
 - **Live mode from the cloud is unexercised.** The build environment cannot reach Coinbase, so live polling was tested only with fixtures, not end to end.
 - **The Python/TypeScript version is local only.** It has no hosting, authentication or rate limits, listens on 127.0.0.1, and must not be exposed until those are added.
@@ -82,6 +96,7 @@ Paper Trail was built by one operator directing AI coding agents (Claude Code an
 
 ```sh
 npm test                        # JavaScript engine, report card, settle, history and settings tests
+npm run test:research           # research harness: simulator vs the engine, fetch guard, statistics, study (synthetic data only)
 python3 -m http.server 8080     # then open http://127.0.0.1:8080 and run the included sample
 ```
 

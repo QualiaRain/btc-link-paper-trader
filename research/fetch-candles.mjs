@@ -31,6 +31,10 @@
 //     count, pause and backoff are parameters.
 //   * an empty answer (HTTP 200, `[]`) is stored as what it is, no rows: nothing is filled in and the month does
 //     not fail. Each month records how many of its answers were empty.
+//   * on the exchange's host, an answer that is not dated (dataset.mjs receiptDated: a Date header in a format RFC
+//     9110 allows and a receive time, both later than the close of the last bucket asked for) is stored as
+//     answered and counted in its month's line, and the first one of a run is shown at once as a warning:
+//     storeCompleteness reports every month that holds one.
 //
 // LIMITS ON WAITING AND RETRYING. Node turns a timer above 2**31-1 ms into a 1 ms timer, so an unbounded wait would
 // become no wait at all. No single wait (pause, retry backoff, Retry-After, request timeout) is longer than
@@ -50,7 +54,7 @@ import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {ASSETS, CHUNK, DEFAULT_DIR, EXCHANGE_ORIGIN, EXPLORATION_FROM, FORMAT, LOOPBACK_SOURCE, MINUTE, RESERVED_FROM, ROW_BYTES,
   SOURCE, assertBucketAllowed, manifestBounds, manifestPath, monthKey, monthPaths, monthRange, readManifest, readMonth,
-  sha256Hex} from './dataset.mjs';
+  receiptDated, sha256Hex} from './dataset.mjs';
 
 // Defined in dataset.mjs, where storeCompleteness holds a store's label and receipts against them: the two source
 // labels, the exchange's origin, and CHUNK, the step between requests (replay.js: `t+=299*MINUTE`).
@@ -189,7 +193,7 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
   }
   const total = assets.reduce((sum, asset) => sum + todo[asset].reduce((n, plan) => n + plan.chunks.length, 0), 0);
   const began = performance.now(), stop = {error: null}, requests = Object.fromEntries(assets.map(a => [a, 0]));
-  let done = 0;
+  let done = 0, undatedShown = false;
 
   // replay.js `request`, with maxAttempts, backoffMs and timeoutMs as parameters and Retry-After honoured.
   async function request(url, label) {
@@ -260,7 +264,7 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
   async function stream(asset) {
     for (const plan of todo[asset]) {
       const seen = new Map(), receipts = [], label = `${asset} ${plan.month}`;
-      let duplicates = 0, retries = 0, empty = 0;
+      let duplicates = 0, retries = 0, empty = 0, undated = 0;
       for (const [start, end] of plan.chunks) {
         if (stop.error) throw STOPPED;
         if (requests[asset]++ && pauseMs > 0) await sleep(pauseMs);
@@ -284,11 +288,25 @@ export async function fetchCandles({from = '2020-01-01', to = '2025-09-30', asse
             if (JSON.stringify(seen.get(time)) !== JSON.stringify(row)) throw new Error(`${asset}: conflicting duplicate candle at ${iso(time)} (${plan.month}): ${url}`);
           } else seen.set(time, row);
         }
+        // On the exchange's host every answer must be dated (dataset.mjs receiptDated), or storeCompleteness reports
+        // its month and the study refuses the store. The first answer that is not is shown at once, so that a run
+        // whose answers all lack a usable Date header can be stopped in its first second; the month lines count them.
+        if (!base.loopback && !receiptDated(response.receipt, end)) {
+          undated++;
+          if (!undatedShown) {
+            undatedShown = true;
+            log(`warning: ${label}: an answer is not dated: storeCompleteness needs a Date header in a format RFC 9110 allows and a receive time, ` +
+              `both later than ${iso(end + MINUTE)}, when the last bucket asked for closed (Date header: ${JSON.stringify(response.receipt.httpDate)}, ` +
+              `received ${iso(response.receipt.receivedAt)}). Every month holding such an answer is reported and the study refuses the store; ` +
+              `each month's line counts them. Only this first one is shown: ${url}`);
+          }
+        }
         receipts.push(response.receipt); retries += response.retries; done++;
       }
       const entry = store(asset, plan, seen, receipts, duplicates, empty);
       log(`${label}: ${entry.rows} rows from ${receipts.length} requests${retries ? `, ${retries} retries` : ''}` +
-        `${empty ? `, ${empty} empty ${empty === 1 ? 'response' : 'responses'}` : ''}${note[label] ?? ''}; ` +
+        `${empty ? `, ${empty} empty ${empty === 1 ? 'response' : 'responses'}` : ''}` +
+        `${undated ? `, ${undated} ${undated === 1 ? 'answer' : 'answers'} not dated` : ''}${note[label] ?? ''}; ` +
         `${done}/${total} requests done, ETA ${duration((performance.now() - began) / done * (total - done))}`);
       // Either that minute has no candle at the exchange, or the exchange read the request's `end` as exclusive
       // (then no request shares a row with the next one, and every month ends like this). The month is stored as
