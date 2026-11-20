@@ -19,7 +19,7 @@ validate millisecond predictions, and a profitable replay does not establish a r
 | Stepwise sessions (advance by frames / next decision / finish), manual paper orders, stale-action and run-ownership protection | Done, JS-parity + real API/browser tests |
 | Server-side candle retrieval (retries, receipts, cancellation, progress) and candle jobs | Done, tested against the existing JS and a loopback server |
 | Browser-format run evidence (packed history catalog, last observed frame, matching `marketSha256`) | Done for sample and fetched runs; verified with the real `history.js` |
-| Live paper sessions (server-side public quotes, ticks, live orders) | Done, 24 fetch + 6 session parity scenarios against the existing JS |
+| Live paper sessions (server-side public quotes, ticks, live orders) | Done, 25 fetch + 6 session parity scenarios against the existing JS |
 | Frontend: config/run/history views, chart, forecasts and positions, ledger, read-only snapshots, exports, reattach, range source, live sessions | Done, real-Chromium tests |
 | CI (`.github/workflows/ci.yml` runs `scripts/verify.sh`, read-only token, no deploy) | Done |
 | Switching the root app to the TypeScript build and retiring the JS engine | Not done (see below) |
@@ -109,7 +109,7 @@ Seeded, clock-free inputs are run through the **existing** JS modules to produce
 Areas: base accounting and settings (chronology, missing/stale/crossed quotes, outcome expiry, warmup, fees/slippage,
 positions, stop loss, risk limits, cash yield, report card counts, settlement with stale quotes, canonical hashing, sample and
 range replays), `sessions/` (13 scenarios), `candles/` (retrieval with
-stubbed `fetch`: retries, errors, gaps, boundaries), `evidence/` (packing and hashes), `live/` (24 fetch + 6 session
+stubbed `fetch`: retries, errors, gaps, boundaries), `evidence/` (packing and hashes), `live/` (25 fetch + 6 session
 scenarios with stubbed `fetch` and `Date.now`). A JS freshness test per area fails if a golden stops matching the JS, and
 exact-boundary cases make off-by-one regressions fail. Frontend tests compare the UI and API with an independent oracle
 that replays the same actions through the root `engine.js`/`replay.js`.
