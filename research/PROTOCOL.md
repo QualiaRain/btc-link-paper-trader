@@ -203,63 +203,94 @@ its confirmation windows; and the rerun at `feeBps` 40.
 
 ## What the tests can and cannot do (measured on simulated data, before any real data)
 
-Every figure in this section describes the tests, not a rule and not a market. The figures are measured by
-`node research/calibration.mjs` on simulated returns and recorded in `research/calibration.json`. The two tables
-below are written from that file by the same command, and a test fails if they differ from it.
+Every figure in this section describes the tests, not a rule and not a market. The figures are measured on
+simulated returns by `node research/calibration.mjs --write`, which records them in `research/calibration.json`
+and writes the two tables below from that file; a test fails if the tables differ from it.
 
 **How often each test passes when there is nothing to find.** In every row but the last, every true mean (for the
 last column, every true intercept) is exactly zero. A cell near its column's level, 5% for the two search columns
 and 1% for the other two, means the test is as strict as it claims. A lower cell means it is stricter than that. A
-higher cell means it passes that many times too often.
+higher cell means it passes too often, by the ratio of the cell to the level.
 
 <!-- calibration:sizes:start -->
-(not yet measured: `node research/calibration.mjs --write` fills this table)
+| No-skill returns | Search-adjusted p < 0.05, one family (3,360 settings) | Search-adjusted p < 0.05, all families (13,200 settings) | Confirmation p < 0.01 (24 windows) | "More than a share of buy-and-hold: yes" at p < 0.01 (24 windows) |
+|---|---|---|---|---|
+| Independent windows, bell-shaped | 2.5% (10 of 400) | 2.0% (4 of 200) | 0.7% (144 of 20,000) | 0.9% (184 of 20,000) |
+| Left-skewed (skewness −0.95) | 3.8% (15 of 400) | 1.5% (3 of 200) | 1.2% (244 of 20,000) | 1.5% (309 of 20,000) |
+| Left-skewed (skewness −1.75) | 2.3% (9 of 400) | 0.5% (1 of 200) | 1.5% (300 of 20,000) | 2.0% (398 of 20,000) |
+| Right-skewed (skewness +0.95) | 2.3% (9 of 400) | 1.0% (2 of 200) | 0.2% (44 of 20,000) | 0.4% (75 of 20,000) |
+| Half the windows without a trade | 0.3% (1 of 400) | 0 of 200 (below 1.5%) | 0.5% (102 of 20,000) | 0.6% (121 of 20,000) |
+| Runs (lag-1 autocorrelation 0.2) | 16% (65 of 400) | 18% (35 of 200) | 1.3% (263 of 20,000) | 1.7% (348 of 20,000) |
+| Left-skewed (−0.95) and runs | 16% (65 of 400) | 17% (33 of 200) | 2.1% (413 of 20,000) | 2.6% (513 of 20,000) |
+| Left-skewed (−1.75) and runs | 13% (51 of 400) | 16% (32 of 200) | 2.9% (576 of 20,000) | 3.5% (705 of 20,000) |
+| Regimes: good and bad stretches of several windows (lag-1 autocorrelation 0.2) | 89% (354 of 400) | 100% (200 of 200) | 4.8% (962 of 20,000) | 4.9% (970 of 20,000) |
+| Regimes: calm windows with small gains, turbulent windows with large losses | 27% (107 of 400) | 30% (60 of 200) | 13% (2,542 of 20,000) | 12% (2,409 of 20,000) |
+| No timing value: 40% invested in a rising market | not measured | not measured | 18% (3,673 of 20,000) | 0.8% (159 of 20,000) |
 <!-- calibration:sizes:end -->
 
-The search columns simulate the grid as clusters of 25 near-identical settings over 50 windows; how alike the real
-grid's settings are cannot be known before the data. For the last column each row's returns, scaled to a standard
-deviation of 3%, are added to 40% of a comparison account that gains 6% a window with a standard deviation of
-15%. The last row is that same simulated rule with bell-shaped returns, and there the confirmation test is applied
-to its returns as they are: it has no timing value, only time spent invested in a rising market.
+The search columns simulate the grid as clusters of 25 near-identical settings over 50 windows (the one-family
+column's last cluster has 10), with the first 2,000 of the protocol's 10,000 resamples; how alike the real grid's
+settings are cannot be known before the data. Families X (2,400 settings) and L (720) have no column of their own.
+For the last column each row's returns, multiplied by 3, are added to 40% of a comparison account that gains 6% a
+window with a standard deviation of 15%. The last row is that same simulated rule with bell-shaped returns, and
+there the confirmation test is applied to its returns as they are: it has no timing value, only time spent
+invested in a rising market.
 
 Read row by row:
 
 - **Independent windows** (the first five rows). The confirmation test and the buy-and-hold reading stay within
-  about twice their level whatever the shape of the returns. The search-adjusted p-value is near its level for one
-  family and several times too strict for all families pooled.
-- **Runs** (the next three rows: each window leans toward the one before it). Every test passes too often, the
-  search-adjusted p-value by the widest margin.
-- **Regimes** (the two rows after those: good and bad stretches lasting several windows, with the same lag-1
-  autocorrelation as the runs). Every test fails. These are the rows to read before trusting any label.
-- **A rising market** (the last row). The confirmation test does what it says, since the mean really is above
-  zero, and it says so in a large share of samples. The buy-and-hold reading stays near its level. That is why the
-  reading stands beside every label.
+  about twice their level for every shape measured (at most 1.5% and 2.0%). The search-adjusted p-value is stricter
+  than it claims: about half its level for one family and about a fifth for all families pooled, and stricter
+  still when half the windows have no trade.
+- **Runs** (the next three rows: each window leans toward the one before it). Every test passes too often: the
+  search-adjusted p-value about three times its level, the confirmation test and the buy-and-hold reading up to
+  three and a half times theirs (1.3% to 3.5% at a 1% level).
+- **Regimes** (the two rows after those: good and bad stretches lasting several windows, with about the same lag-1
+  autocorrelation as the runs). Every test fails: the search-adjusted p-value passes 27% to 100% of the studies,
+  the confirmation test and the buy-and-hold reading about 5% and 12% to 13% of the nominees at a 1% level. These
+  are the rows to read before trusting any label.
+- **A rising market** (the last row). The confirmation test is right to pass, since the mean really is above zero,
+  and it does so in about one sample in five (18%). The buy-and-hold reading stays near its level (0.8%). That is
+  why the reading stands beside every label.
 
 Limits that no test on these windows can remove:
 
 - **Rare large losses.** A rule that gains a little in most windows and loses a lot in one window out of twenty
   looks excellent in every sample that happens to contain no such loss; with 24 windows that is about three samples
   in ten. The worst window and the skewness are reported so this shape can be seen, but an unseen loss cannot be.
-- **Regimes.** When good and bad windows come in stretches lasting several windows, 24 or 50 windows hold only a
-  handful of independent stretches, and a sample that happens to hold few bad ones looks excellent. Substitutes
-  were measured (a t-test on means of blocks of three, four or six windows, and a long-run variance with four
-  lags) and none brought the confirmation test back to its level on 24 windows. So the limit is stated instead:
-  **every label in this protocol assumes that a setting's good and bad windows do not come in stretches longer
-  than about one window, and for these two assets that cannot be assumed.** The lag-1 autocorrelation of 24
-  windows does not reveal such stretches, which is why lags 1 to 4, the two halves and the lowest third are
-  reported beside it.
+- **Dependence between windows.** The tests keep their stated level only when windows are independent of one
+  another. When each window leans on the one before (runs) they pass up to three and a half times too often. When
+  good and bad windows come in stretches lasting several windows (regimes), 24 or 50 windows hold only a handful of
+  independent stretches, a sample that happens to hold few bad ones looks excellent, and the confirmation test
+  passes five to thirteen times too often. An independent verifier tried substitutes in a scratch measurement that
+  is not part of `research/calibration.json` (a t-test on means of blocks of three, four or six windows, and a
+  long-run variance with four lags); none brought the confirmation test back to its level on 24 windows. So the
+  limit is stated instead: **every label in this protocol assumes that a setting's windows are independent of one
+  another, and for these two assets that cannot be assumed.** The autocorrelations of 24 windows barely show such
+  stretches: in scratch counts on the simulated regimes the average lag-1 autocorrelation was 0.06 to 0.08 and lags
+  2 to 4 were near zero. Lags 1 to 4, the two halves and the lowest third are reported so that the shape of a
+  nominee's returns can be seen; none of them is a test.
 - **Low power.** The table below shows how often a real mean is found. "Not confirmed" does not show that a
   smaller positive mean is absent.
 
 **How often a real mean is found.** One setting has the true mean shown, in standard deviations of its own window
-returns; every other setting has none.
+returns; every other setting has none. The mean is added to the first row's own simulated studies and nominees, so
+the rows of this table are not independent of each other or of that row. The first column counts a pass whether or
+not the best score belongs to the setting that has the mean (in the 0.25 row none of the four passes did;
+`research/calibration.json` records both counts).
 
 <!-- calibration:power:start -->
-(not yet measured: `node research/calibration.mjs --write` fills this table)
+| True mean per window, in standard deviations | Search-adjusted p < 0.05, all families (13,200 settings) | Confirmed with five nominees (p < 0.01) | Confirmed with one nominee (p < 0.05) | "More than a share of buy-and-hold: yes" with five nominees |
+|---|---|---|---|---|
+| 0.25 | 4.0% (4 of 100) | 8.9% (1,781 of 20,000) | 28% (5,515 of 20,000) | 8.9% (1,784 of 20,000) |
+| 0.5 | 19% (19 of 100) | 40% (8,024 of 20,000) | 71% (14,238 of 20,000) | 37% (7,353 of 20,000) |
+| 0.75 | 62% (62 of 100) | 80% (15,904 of 20,000) | 96% (19,115 of 20,000) | 74% (14,869 of 20,000) |
+| 1 | 96% (96 of 100) | 97% (19,383 of 20,000) | 100% (19,941 of 20,000) | 95% (18,952 of 20,000) |
 <!-- calibration:power:end -->
 
-A mean of 0.75 standard deviations per 28-day window is, over 13 windows a year, a yearly return of about 2.7
-times its yearly standard deviation.
+So with five nominees a mean of 0.75 standard deviations per 28-day window is confirmed about four times in five,
+and the pooled search finds it about six times in ten. Over 13 windows a year that mean is a yearly return of about
+2.7 times its yearly standard deviation.
 
 ## Always reported, whatever the outcome
 
@@ -280,8 +311,8 @@ A confirmed nominee means only that one setting, chosen on 2020 to 2023, also ha
 2023 to 2025 at these cost assumptions. If the buy-and-hold reading beside it is *no*, that return cannot be told
 apart from holding a share of the two assets while they rose, and it justifies nothing further. If the reading is
 *yes*, it would justify writing a held-out contract for that setting and nothing more: not a trading edge, not
-executable fills, not future profit. Both carry the limits measured above. They pass too often when good and bad
-windows come in regimes, so a pass is a reason to test on untouched data and never a finding by itself. Replay
+executable fills, not future profit. Both carry the limits measured above. They pass too often when windows are
+not independent of one another, so a pass is a reason to test on untouched data and never a finding by itself. Replay
 quotes are candle closes with an assumed spread; latency, queue position, market impact, taxes and funding are not
 modeled, and the fee assumption is one venue's published rate, not a measured cost. If nothing is confirmed, that
 finding is bounded the same way: none of the settings searched was confirmed on these windows at these costs,
@@ -318,9 +349,9 @@ description of its tests did not. Their findings, and what changed:
 | Reading 7 says what an invalid window does: it keeps its place, pairs with nothing, and can still be drawn in a search resample | The earlier sentence ("dropped before any statistic is computed") could also be read as removing the window, and a verifier showed on synthetic prices that the two readings can nominate different settings. The reading already in the code is kept, on the principle that windows 56 days apart are not consecutive; no real window had been seen |
 | A month that holds no row is not complete, and "fetched from the exchange" is read from the receipts as well as the label | A verifier's store with 66 of 69 months empty ran as a complete store with "Deviations: none", and an edited source label passed although every receipt in the same store named another host |
 | New: "More than a share of buy-and-hold: yes or no" beside every label, and the comparison account's own row | "Confirmed" tests a mean above zero, which a long-only rule meets by being invested while the two assets rise (the last row of the first table). Before this amendment the regression was reported without a reading, leaving the interpretation to be made after the result was known |
-| New descriptive figures: autocorrelation at lags 1 to 4, the two halves, the lowest third (Readings 8 and 9) | A verifier measured that the lag-1 autocorrelation of 24 windows averages 0.06 to 0.08 under regimes that make the confirmation test pass five to thirteen times too often, so it cannot warn of them |
-| The section on what the tests can do is rewritten. Its tables are written from a committed measurement, the search test is quoted at the widths the study uses (3,360 and 13,200), regimes and a rising market have rows, and the power figures are a table | A verifier found the earlier table quoted the search test at 300 settings, a width no family has: its "in runs" figure of 10% was measured at 17% for 3,360 settings and about 20% for 13,200, while on independent returns the pooled test passed about ten times too rarely. Five cells were off by more than their sampling error, "up to about twice too lenient" ignored regimes, and "roughly half a standard deviation" overstated what the tests can find |
-| "Regimes" is a third stated limit, with the sentence that every label assumes no stretch longer than about one window | Same finding. The verifier tried block means and a long-run variance and none restored the level, so the limit is disclosed and not patched |
+| New descriptive figures: autocorrelation at lags 1 to 4, the two halves, the lowest third (Readings 8 and 9) | A verifier measured that the lag-1 autocorrelation of 24 windows averages 0.06 to 0.08 under regimes that make the confirmation test pass five to thirteen times too often, so it cannot warn of them. Lags 2 to 4 cannot either (near zero on the same data); the new figures show the shape of a nominee's returns and are not tests |
+| The section on what the tests can do is rewritten. Its tables are written from a committed measurement, the search test is quoted at the width of families P, H and R (3,360) and pooled (13,200), regimes and a rising market have rows, and the power figures are a table | A verifier found the earlier table quoted the search test at 300 settings, a width no family has. Under runs its 10% became 16% at 3,360 settings and 18% at 13,200 in the committed measurement (17% and about 20% in the verifier's own run), while on independent windows the pooled test passed less than half as often as it claims. Five cells were off by more than their sampling error, "up to about twice too lenient" ignored regimes, and "roughly half a standard deviation" overstated what the tests can find |
+| "Dependence between windows" is a third stated limit, with the sentence that every label assumes independent windows | Same finding. The committed measurement shows that the runs rows already pass too often, not only the regimes. The verifier tried block means and a long-run variance in a scratch measurement and none restored the level, so the limit is disclosed and not patched |
 | The closing sentence about "not confirmed" is now conditional | The report printed it as fixed text in every run, also beside nominees labelled confirmed |
 
 The data boundary, the windows, the design and confirmation sets, the simulation settings, the cost levels, the

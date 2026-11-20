@@ -18,7 +18,11 @@
 //   (relative to the score, absolute below a score of 1; the statistic has no unit). An exact tie is then not
 //   lost to rounding, so ">=" behaves as written on decimal data, and the p-value can only be overstated. This
 //   holds while a series' mean is within about a hundred of its standard deviations of zero; beyond that the
-//   rounding of the returns themselves exceeds the tolerance.
+//   rounding of the returns themselves exceeds the tolerance. The same tolerance decides which of two settings
+//   holds the larger score (searchAdjustedP): scores closer than that are a tie.
+// - A series whose standard deviation is not finite (values beyond about 1e154, whose squares overflow) has no
+//   score: score, the autocorrelation functions, searchAdjustedP, confirmationP and buyAndHoldReading throw a
+//   RangeError for it instead of returning NaN.
 export {signTestPValue} from '../report-card.js';
 
 const ZERO_SPREAD = 1e-12, TIE_TOLERANCE = 1e-12;
@@ -60,18 +64,25 @@ function moments(v, n = v.length) {
 // mean / (sd / sqrt(n)); 0 when sd is 0 (which includes n < 2).
 const tOf = ({n, mean, sd}) => (sd === 0 ? 0 : mean / (sd / Math.sqrt(n)));
 
+// The moments of a series that can be scored: a standard deviation that is not finite is refused (conventions).
+function finiteSd(m, label = 'Series') {
+  if (!Number.isFinite(m.sd)) throw new RangeError(`${label}: the standard deviation is not finite (the squares of the values overflow)`);
+  return m;
+}
+
 // PROTOCOL.md, Score: "the lag-1 autocorrelation of r in window order (sum of products of deviations over
-// adjacent valid windows, divided by the sum of squared deviations)". xs is already validated, m its moments.
-function lag1Of(xs, m) {
+// adjacent valid windows, divided by the sum of squared deviations)", and Reading 9: "The autocorrelation at lag
+// j pairs valid windows exactly j places apart and divides by the same sum of squared deviations as lag 1".
+// xs is already validated, m its moments.
+function autocorrelationOf(xs, m, lag) {
   if (m.sd === 0) return 0;
-  let products = 0, squares = 0, previous = NaN;   // previous: the deviation of window w - 1, NaN if invalid
+  let products = 0, squares = 0;
   for (let w = 0; w < xs.length; w++) {
     const deviation = xs[w] - m.mean;
-    if (deviation === deviation) {
-      squares += deviation * deviation;
-      if (previous === previous) products += previous * deviation;
-    }
-    previous = deviation;
+    if (deviation !== deviation) continue;                  // an invalid window enters nothing and pairs with nothing
+    squares += deviation * deviation;
+    const earlier = w < lag ? NaN : xs[w - lag] - m.mean;   // the deviation of window w - lag, NaN if invalid
+    if (earlier === earlier) products += earlier * deviation;
   }
   return products / squares;
 }
@@ -82,7 +93,8 @@ const factorOf = lag1 => { const a = Math.max(0, lag1); return Math.sqrt((1 - a)
 
 // Everything the protocol's score is made of, for one series aligned to its windows.
 function describe(xs, label) {
-  const values = validEntries(xs, label), m = moments(values), t = tOf(m), lag1 = lag1Of(xs, m), factor = factorOf(lag1);
+  const values = validEntries(xs, label), m = finiteSd(moments(values), label);
+  const t = tOf(m), lag1 = autocorrelationOf(xs, m, 1), factor = factorOf(lag1);
   return {values, n: m.n, mean: m.mean, sd: m.sd, t, lag1, factor, score: t * factor};
 }
 
@@ -99,6 +111,15 @@ export function tStat(xs) { return tOf(moments(validEntries(xs))); }
 // m the mean of the valid entries. An invalid window breaks adjacency: its two neighbours are not a pair.
 // 0 when the denominator is 0 (sd is 0), which includes fewer than two valid entries.
 export function lag1Autocorrelation(xs) { return describe(xs).lag1; }
+
+// The same at lag `lag` (a positive integer), PROTOCOL.md Reading 9: the products are summed over the windows w
+// for which x[w] and x[w + lag] are both valid (an invalid window between them changes nothing), and the
+// denominator is the one of lag 1. Reported as computed: not floored at 0. autocorrelationAt(xs, 1) is
+// lag1Autocorrelation(xs), by the same code.
+export function autocorrelationAt(xs, lag) {
+  if (!Number.isInteger(lag) || lag < 1) throw new RangeError('lag must be a positive integer');
+  return autocorrelationOf(xs, finiteSd(moments(validEntries(xs))), lag);
+}
 
 // sqrt((1 - a) / (1 + a)) with a = max(0, lag1Autocorrelation(xs)): 1 for a series without positive lag-1
 // autocorrelation, smaller when good and bad windows come in runs.
@@ -272,8 +293,11 @@ const noSpreadBound = (largest, m) => 2 * m * (ZERO_SPREAD * largest) ** 2;
 // any other column and ignored).
 //
 // Observed: the maximum over eligible settings of the protocol's score T(c) = score(returns[c]); argmax is the
-// setting holding it (the earliest in `eligible` on a tie). A setting with no valid window is left out: it is
-// never the argmax and adds nothing to the maximum.
+// setting holding it and observedMax is that setting's score. Ties go to the earliest setting in `eligible`: a
+// later setting takes the maximum only when its score is above it by more than the tie tolerance of the
+// conventions, so two settings whose scores are equal as written and differ in their last bits (a series and
+// its reverse) are a tie, like two identical series. A setting with no valid window is left out: it is never
+// the argmax and adds nothing to the maximum.
 // Each resample draws as many window indices as there are columns, with replacement, ONE draw shared by every
 // setting: window = floor(u * columns) for consecutive u from a single mulberry32(seed) stream, resample after
 // resample. The draws do not depend on returns or eligible, so two calls with the same seed and column count
@@ -287,7 +311,7 @@ const noSpreadBound = (largest, m) => 2 * m * (ZERO_SPREAD * largest) ** 2;
 // result is observedMax -Infinity, argmax -1, p 1. p is a plain share (no +1): 0 means below 1 / resamples.
 //
 // How often this p-value falls below 0.05 when no setting has a positive mean is measured, not assumed:
-// research/calibration.mjs, and PROTOCOL.md "What the two tests can and cannot do".
+// research/calibration.mjs, and PROTOCOL.md "What the tests can and cannot do".
 //
 // Cost: about 1.5 ns per setting x column x resample on typed arrays (about 10 s for 13,200 x 50 x 10,000).
 export function searchAdjustedP({returns, eligible, resamples = 10000, seed = 20261118}) {
@@ -309,7 +333,9 @@ export function searchAdjustedP({returns, eligible, resamples = 10000, seed = 20
     if (!Number.isInteger(c) || c < 0 || c >= returns.length) throw new RangeError(`Eligible setting index out of range: ${c}`);
     const row = returns[c], observed = describe(row, `Setting ${c}`);
     if (observed.n === 0) continue;
-    if (observed.score > observedMax) { observedMax = observed.score; argmax = c; }
+    if (argmax === -1 || observed.score > observedMax + TIE_TOLERANCE * Math.max(1, Math.abs(observedMax))) {
+      observedMax = observed.score; argmax = c;
+    }
     if (observed.sd === 0) continue;   // without spread, sd* is 0 in every resample
     let pattern = '', largest = 0;
     for (let w = 0; w < windows; w++) {
@@ -408,4 +434,25 @@ export function confirmationP(xs, {resamples = 10000, seed = 20261118} = {}) {
   result.pResample = reached / resamples;
   result.p = Math.max(result.pT, result.pResample);
   return result;
+}
+
+// "More than a share of buy-and-hold" for one nominee (PROTOCOL.md, "Confirmation", as amended). r: the nominee's
+// returns, b: the comparison account's, both aligned to the same confirmation windows, NaN where a window is
+// invalid.
+//
+// "Fit r = intercept + slope × b by least squares over the nominee's valid confirmation windows": ols(r, b), over
+// the n windows valid for both series. pFit is "the fit's one-sided p-value for intercept > 0 (Student's t, n − 2
+// degrees of freedom)". adjusted is "the confirmation p-value defined above computed on the series r − slope × b":
+// confirmationP of that series, which is NaN wherever r or b is, so adjacency follows the window order. p, "the
+// larger of" the two, is max(pFit, adjusted.p).
+// When the fit is undefined (fewer than 3 valid pairs, or b without spread), intercept, slope, both standard
+// errors and pFit are NaN, adjusted is the confirmation calculation of a series with no valid window, and p is 1.
+// Whether n is at least 20, intercept > 0 and p < 0.05 / k (the reading "yes") is the caller's rule to apply.
+export function buyAndHoldReading(r, b, {resamples = 10000, seed = 20261118} = {}) {
+  const fit = ols(r, b), defined = fit.n >= 3 && fit.slope === fit.slope;
+  if (defined && fit.pInterceptGreater !== fit.pInterceptGreater)
+    throw new RangeError('buyAndHoldReading: the fit is not finite (the squares of the values overflow)');
+  const adjusted = confirmationP(Float64Array.from(r, (v, w) => (defined ? v - fit.slope * b[w] : NaN)), {resamples, seed});
+  return {n: fit.n, intercept: defined ? fit.intercept : NaN, slope: defined ? fit.slope : NaN, seIntercept: fit.seIntercept,
+    seSlope: fit.seSlope, pFit: fit.pInterceptGreater, adjusted, p: defined ? Math.max(fit.pInterceptGreater, adjusted.p) : 1};
 }

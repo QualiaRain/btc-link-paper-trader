@@ -1,0 +1,23 @@
+{
+  "statsSha256": "a3e219d6dfb4150f9617306830b0815cb828cb1e408922185744518c5e15d063",
+  "options": {"seed":20261118,"search":{"level":0.05,"windows":50,"clusterSize":25,"correlation":0.95,"resamples":2000,"family":{"settings":3360,"studies":400},"pooled":{"settings":13200,"studies":200},"powerStudies":100,"strongSetting":7},"nominees":{"windows":24,"perRow":20000,"first":300,"resamples":10000,"level":0.01,"levelOneNominee":0.05},"holding":{"mean":6,"sd":15,"share":0.4,"scale":3}},
+  "sizes": [
+    {"label":"Independent windows, bell-shaped","family":{"count":10,"of":400},"pooled":{"count":4,"of":200},"confirmation":{"count":144,"of":20000,"first300":4},"buyAndHold":{"count":184,"of":20000,"first300":1}},
+    {"label":"Left-skewed (skewness −0.95)","family":{"count":15,"of":400},"pooled":{"count":3,"of":200},"confirmation":{"count":244,"of":20000,"first300":5},"buyAndHold":{"count":309,"of":20000,"first300":7}},
+    {"label":"Left-skewed (skewness −1.75)","family":{"count":9,"of":400},"pooled":{"count":1,"of":200},"confirmation":{"count":300,"of":20000,"first300":3},"buyAndHold":{"count":398,"of":20000,"first300":3}},
+    {"label":"Right-skewed (skewness +0.95)","family":{"count":9,"of":400},"pooled":{"count":2,"of":200},"confirmation":{"count":44,"of":20000,"first300":1},"buyAndHold":{"count":75,"of":20000,"first300":1}},
+    {"label":"Half the windows without a trade","family":{"count":1,"of":400},"pooled":{"count":0,"of":200},"confirmation":{"count":102,"of":20000,"first300":0},"buyAndHold":{"count":121,"of":20000,"first300":1}},
+    {"label":"Runs (lag-1 autocorrelation 0.2)","family":{"count":65,"of":400},"pooled":{"count":35,"of":200},"confirmation":{"count":263,"of":20000,"first300":4},"buyAndHold":{"count":348,"of":20000,"first300":5}},
+    {"label":"Left-skewed (−0.95) and runs","family":{"count":65,"of":400},"pooled":{"count":33,"of":200},"confirmation":{"count":413,"of":20000,"first300":5},"buyAndHold":{"count":513,"of":20000,"first300":4}},
+    {"label":"Left-skewed (−1.75) and runs","family":{"count":51,"of":400},"pooled":{"count":32,"of":200},"confirmation":{"count":576,"of":20000,"first300":9},"buyAndHold":{"count":705,"of":20000,"first300":8}},
+    {"label":"Regimes: good and bad stretches of several windows (lag-1 autocorrelation 0.2)","family":{"count":354,"of":400},"pooled":{"count":200,"of":200},"confirmation":{"count":962,"of":20000,"first300":21},"buyAndHold":{"count":970,"of":20000,"first300":22}},
+    {"label":"Regimes: calm windows with small gains, turbulent windows with large losses","family":{"count":107,"of":400},"pooled":{"count":60,"of":200},"confirmation":{"count":2542,"of":20000,"first300":37},"buyAndHold":{"count":2409,"of":20000,"first300":33}},
+    {"label":"No timing value: 40% invested in a rising market","family":null,"pooled":null,"confirmation":{"count":3673,"of":20000,"first300":54},"buyAndHold":{"count":159,"of":20000,"first300":4}}
+  ],
+  "power": [
+    {"mean":0.25,"pooled":{"count":4,"of":100,"best":0},"five":{"count":1781,"of":20000,"first300":22},"one":{"count":5515,"of":20000,"first300":78},"buyAndHold":{"count":1784,"of":20000,"first300":24}},
+    {"mean":0.5,"pooled":{"count":19,"of":100,"best":16},"five":{"count":8024,"of":20000,"first300":112},"one":{"count":14238,"of":20000,"first300":208},"buyAndHold":{"count":7353,"of":20000,"first300":103}},
+    {"mean":0.75,"pooled":{"count":62,"of":100,"best":60},"five":{"count":15904,"of":20000,"first300":233},"one":{"count":19115,"of":20000,"first300":290},"buyAndHold":{"count":14869,"of":20000,"first300":220}},
+    {"mean":1,"pooled":{"count":96,"of":100,"best":95},"five":{"count":19383,"of":20000,"first300":291},"one":{"count":19941,"of":20000,"first300":299},"buyAndHold":{"count":18952,"of":20000,"first300":286}}
+  ]
+}
